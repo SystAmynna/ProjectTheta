@@ -1,0 +1,70 @@
+[package]
+name = "projet-theta"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = [
+    "client", 
+    "server", 
+    "render", 
+    "network"
+]
+client = [
+    "lightyear/client",
+    "bevy/keyboard"
+]
+server = [
+    "lightyear/server"
+]
+render = [
+    "bevy/bevy_render",
+  "bevy/bevy_core_pipeline",
+  "bevy/bevy_camera",
+  "bevy/bevy_sprite",
+  "bevy/bevy_sprite_render",
+  "bevy/bevy_gizmos",
+  "bevy/bevy_gizmos_render",
+  "bevy/bevy_text",
+  "bevy/default_font",
+  "bevy/bevy_window",
+  "bevy/bevy_winit",
+  "bevy/bevy_asset",
+  "bevy/bevy_image",
+  "bevy/png",
+  "bevy/x11",
+  "bevy/wayland"
+]
+network = [
+    "lightyear/udp"
+]
+
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = [
+    "std",
+    "multi_threaded",
+    "async_executor",
+    "bevy_log",
+    "bevy_state"
+]}
+avian2d = { version = "0.7", default-features = false, features = [
+  "2d",
+  "f32",
+  "parry-f32",
+  "parallel",
+  "serialize",
+] }
+lightyear = { version = "0.29", default-features = false, features = [
+  "std",
+  "replication",
+  "prediction",
+  "interpolation",
+  "frame_interpolation",
+  "input_native",
+  "avian2d",
+  "netcode",
+] }
+
+[profile.dev.package."*"]
+opt-level = 3
