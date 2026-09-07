@@ -5740,6 +5740,8 @@ dependencies = [
  "bevy",
  "clap",
  "lightyear",
+ "lightyear_avian2d",
+ "serde",
 ]
 
 [[package]]
