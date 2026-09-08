@@ -1,0 +1,31 @@
+use std::net::SocketAddr;
+
+use bevy::prelude::*;
+use clap::Parser;
+use theta_client::{ClientConfig, ClientPlugin};
+use theta_core::CorePlugin;
+use theta_protocole::ProtocolPlugin;
+use theta_render::{RenderPlugin, asset_plugin};
+
+/// Client de ProjectTheta : fenêtre de jeu, rendu et saisie clavier.
+#[derive(Parser, Debug)]
+#[command(name = "theta-client", version, about = "ProjectTheta — client.")]
+struct Cli {
+    /// Adresse du serveur à rejoindre (`ip:port`).
+    #[arg(long, default_value = "127.0.0.1:5000")]
+    server: SocketAddr,
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    App::new()
+        // Le répertoire des assets est décidé par `theta-render`.
+        .add_plugins(DefaultPlugins.set(asset_plugin()))
+        .add_plugins(CorePlugin)
+        .add_plugins(ProtocolPlugin)
+        .add_plugins(RenderPlugin)
+        .add_plugins(ClientPlugin)
+        .insert_resource(ClientConfig { server: cli.server })
+        .run();
+}

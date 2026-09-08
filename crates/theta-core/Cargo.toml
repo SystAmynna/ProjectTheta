@@ -1,0 +1,9 @@
+[package]
+name = "theta-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bevy = { workspace = true }
+avian2d = { workspace = true }

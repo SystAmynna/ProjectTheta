@@ -1,0 +1,21 @@
+[package]
+name = "theta-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "theta_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "theta-client"
+path = "src/main.rs"
+
+[dependencies]
+theta-core = { workspace = true }
+theta-protocole = { workspace = true }
+theta-render = { workspace = true }
+bevy = { workspace = true, features = ["keyboard"] }
+lightyear = { workspace = true, features = ["client"] }
+clap = { workspace = true }

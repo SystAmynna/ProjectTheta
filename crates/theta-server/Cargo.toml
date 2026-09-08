@@ -1,0 +1,20 @@
+[package]
+name = "theta-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "theta_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "theta-server"
+path = "src/main.rs"
+
+[dependencies]
+theta-core = { workspace = true }
+theta-protocole = { workspace = true }
+bevy = { workspace = true }
+lightyear = { workspace = true, features = ["server"] }
+clap = { workspace = true }

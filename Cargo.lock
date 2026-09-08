@@ -5733,18 +5733,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
-name = "projet-theta"
-version = "0.0.1"
-dependencies = [
- "avian2d",
- "bevy",
- "clap",
- "lightyear",
- "lightyear_avian2d",
- "serde",
-]
-
-[[package]]
 name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6829,6 +6817,56 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "theta-client"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "clap",
+ "lightyear",
+ "theta-core",
+ "theta-protocole",
+ "theta-render",
+]
+
+[[package]]
+name = "theta-core"
+version = "0.0.1"
+dependencies = [
+ "avian2d",
+ "bevy",
+]
+
+[[package]]
+name = "theta-protocole"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "lightyear",
+ "lightyear_avian2d",
+ "serde",
+ "theta-core",
+]
+
+[[package]]
+name = "theta-render"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "theta-core",
+]
+
+[[package]]
+name = "theta-server"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "clap",
+ "lightyear",
+ "theta-core",
+ "theta-protocole",
 ]
 
 [[package]]

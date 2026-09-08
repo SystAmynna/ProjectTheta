@@ -1,0 +1,26 @@
+[package]
+name = "theta-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+theta-core = { workspace = true }
+bevy = { workspace = true, features = [
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_camera",
+    "bevy_sprite",
+    "bevy_sprite_render",
+    "bevy_gizmos",
+    "bevy_gizmos_render",
+    "bevy_text",
+    "default_font",
+    "bevy_window",
+    "bevy_winit",
+    "bevy_asset",
+    "bevy_image",
+    "png",
+    "x11",
+    "wayland",
+] }
