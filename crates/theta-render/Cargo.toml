@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 theta-core = { workspace = true }
+avian2d = { workspace = true }
 bevy = { workspace = true, features = [
     "bevy_render",
     "bevy_core_pipeline",

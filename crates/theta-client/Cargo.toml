@@ -16,6 +16,7 @@ path = "src/main.rs"
 theta-core = { workspace = true }
 theta-protocole = { workspace = true }
 theta-render = { workspace = true }
+avian2d = { workspace = true }
 bevy = { workspace = true, features = ["keyboard"] }
 lightyear = { workspace = true, features = ["client"] }
 clap = { workspace = true }

@@ -102,20 +102,76 @@ table, créer l'éventuelle entrée cible, puis `cargo test -p theta-core`.
 `theta-core` ne dépend pas du rendu : `Rarity::rgb()` renvoie un `[f32; 3]`,
 c'est à `theta-render` d'en faire une `Color` Bevy.
 
+## Réseau
+
+Le serveur fait autorité sur un monde partagé ; chaque client qui se connecte y
+reçoit un joueur, prédit le sien et interpole ceux des autres.
+
+| Brique | Où | Rôle |
+| --- | --- | --- |
+| Netcode (UDP) | `theta-server` / `theta-client` | Écoute, handshake, une entité de lien par client. |
+| Réplication | serveur → clients | `Position`, `Rotation`, vélocités, `Player`, `PlayerId`, `PlayerColor`. |
+| Prédiction | client, son joueur | Le clavier agit immédiatement ; le serveur corrige par rollback. |
+| Interpolation | client, les autres joueurs | Mouvement lissé entre deux états reçus. |
+| Inputs | client → serveur | `MoveInput`, un vecteur de direction par tick. |
+
+Les valeurs sur lesquelles les deux camps doivent s'accorder (`TICK_HZ`,
+`PROTOCOL_ID`, `PRIVATE_KEY`) vivent dans `theta-protocole` — jamais dans les
+binaires.
+
+**L'ordre des plugins compte** : `ClientPlugins` / `ServerPlugins` (lightyear)
+doivent être ajoutés **avant** `ProtocolPlugin`, qui installe
+`LightyearAvianPlugin` et n'enregistre les composants physiques que si le
+registre de lightyear existe déjà.
+
+```
+DefaultPlugins/MinimalPlugins -> ClientPlugins/ServerPlugins -> CorePlugin
+    -> ProtocolPlugin -> RenderPlugin (client) -> ClientPlugin/ServerPlugin
+```
+
+`PRIVATE_KEY` est une clé de développement, en dur et publique. Une mise en
+ligne réelle suppose une clé secrète côté serveur et des `ConnectToken` délivrés
+par un service d'authentification.
+
 ## Mouvement du joueur
 
-La logique est volontairement coupée en deux :
+La logique est coupée en trois, chacune ignorant l'étage du dessus :
 
-- **`theta-core`** possède le mouvement (`player::apply_move_intent`, dans
-  `FixedUpdate`). Il lit le composant `MoveIntent` (une direction) et déplace le
-  `Transform` selon `Speed`, en pixels par seconde. Il ignore complètement
-  l'origine de cette intention, ce qui permet au serveur de la remplir depuis
-  le réseau.
-- **`theta-client`** possède le clavier (`input::gather_move_intent`, dans
-  `FixedPreUpdate`). Il traduit les touches (`KeyBindings`, WASD par défaut,
-  modifiable à l'exécution) en `MoveIntent` sur l'entité marquée `LocalPlayer`.
+- **`theta-client`** possède le clavier (`input::gather_move_input`, dans le set
+  `WriteClientInputs` de `FixedPreUpdate`). Il traduit les touches
+  (`KeyBindings`, WASD par défaut) en `ActionState<MoveInput>`, que lightyear
+  bufferise, envoie au serveur et rejoue lors des rollbacks.
+- **`theta-protocole`** fait le pont (`feed_move_intent`, en `FixedUpdate`) :
+  il recopie l'`ActionState` du tick dans le `MoveIntent` de `theta-core`. Le
+  même système tourne des deux côtés — avec l'entrée saisie sur le client, avec
+  l'entrée reçue sur le serveur.
+- **`theta-core`** possède le mouvement (`player::apply_move_intent`). Il lit
+  `MoveIntent` et en fait une `LinearVelocity`, en pixels par seconde. Il ignore
+  complètement l'origine de cette intention.
 
 ```
-clavier ──> MoveIntent ──> Transform
-(client)     (core)         (core)
+clavier ──> ActionState<MoveInput> ──> MoveIntent ──> LinearVelocity ──> Position ──> Transform
+(client)        (protocole)            (protocole)      (core)          (Avian)      (rendu)
 ```
+
+`Position` et `Rotation` (Avian) sont la vérité de la simulation, et les
+composants effectivement répliqués ; `Transform` n'en est qu'une projection
+d'affichage, écrite en `PostUpdate` une fois l'interpolation et la correction
+visuelle appliquées. **Rien ne doit écrire dans `Transform` pendant le jeu.**
+C'est aussi pourquoi `CorePlugin` désactive les plugins `PhysicsTransformPlugin`
+et `PhysicsInterpolationPlugin` d'Avian : `LightyearAvianPlugin` les remplace par
+des versions compatibles avec la prédiction.
+
+## Le monde
+
+`theta-core::world` définit le terrain : une aire rectangulaire centrée sur
+l'origine (`GameWorld::half_extents`, 2000 × 2000 par défaut), sans décor ni
+obstacle. Il n'y vit que des joueurs.
+
+- `spawn_point(index)` répartit les arrivants sur un cercle, pour que deux
+  joueurs ne se superposent jamais en apparaissant.
+- `confine_players` les y maintient. Il ne se contente pas de replacer la
+  position : il annule aussi la composante de vélocité qui pointe vers
+  l'extérieur. Sans ça, Avian réintègre la vitesse juste après et le joueur
+  ressort d'un tick à chaque frame — ce qui, côté client, diverge en permanence
+  du serveur et déclenche des rollbacks en continu.

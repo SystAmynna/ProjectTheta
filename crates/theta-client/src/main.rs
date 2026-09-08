@@ -2,9 +2,10 @@ use std::net::SocketAddr;
 
 use bevy::prelude::*;
 use clap::Parser;
+use lightyear::prelude::client::ClientPlugins;
 use theta_client::{ClientConfig, ClientPlugin};
 use theta_core::CorePlugin;
-use theta_protocole::ProtocolPlugin;
+use theta_protocole::{ProtocolPlugin, tick_duration};
 use theta_render::{RenderPlugin, asset_plugin};
 
 /// Client de ProjectTheta : fenêtre de jeu, rendu et saisie clavier.
@@ -22,6 +23,11 @@ fn main() {
     App::new()
         // Le répertoire des assets est décidé par `theta-render`.
         .add_plugins(DefaultPlugins.set(asset_plugin()))
+        // Lightyear en premier : `ProtocolPlugin` a besoin de son registre de
+        // composants pour enregistrer ceux d'Avian.
+        .add_plugins(ClientPlugins {
+            tick_duration: tick_duration(),
+        })
         .add_plugins(CorePlugin)
         .add_plugins(ProtocolPlugin)
         .add_plugins(RenderPlugin)

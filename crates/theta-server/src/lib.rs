@@ -1,6 +1,10 @@
 use std::net::SocketAddr;
 
 use bevy::prelude::*;
+use lightyear::prelude::*;
+use lightyear::prelude::server::*;
+use theta_core::{GameWorld, PlayerBundle, Speed};
+use theta_protocole::{PRIVATE_KEY, PROTOCOL_ID, PlayerId, player_color};
 
 /// Paramètres d'exécution du serveur, fournis par le binaire.
 #[derive(Resource, Debug, Clone)]
@@ -11,6 +15,13 @@ pub struct ServerConfig {
     pub tick_rate: u32,
 }
 
+/// Nombre de joueurs déjà accueillis, pour répartir les points d'apparition.
+///
+/// Ce compteur ne décroît jamais : deux joueurs successifs n'ont pas à occuper
+/// le même emplacement sous prétexte que le premier est parti.
+#[derive(Resource, Debug, Default)]
+struct SpawnCounter(u32);
+
 /// Côté serveur : autorité de simulation et réplication vers les clients.
 ///
 /// `CorePlugin` (theta-core) et `ProtocolPlugin` (theta-protocole) doivent être
@@ -19,15 +30,96 @@ pub struct ServerPlugin;
 
 impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, log_startup);
-        // TODO: configurer le serveur lightyear (écoute, réplication,
-        // spawn d'un joueur par connexion entrante).
+        app.init_resource::<SpawnCounter>()
+            .add_systems(Startup, start_listening)
+            .add_observer(on_link)
+            .add_observer(on_connected)
+            .add_observer(on_disconnected);
     }
 }
 
-fn log_startup(config: Res<ServerConfig>) {
+/// Ouvre l'écoute UDP et démarre le serveur.
+fn start_listening(config: Res<ServerConfig>, mut commands: Commands) {
+    let netcode = NetcodeServer::new(
+        NetcodeConfig::default()
+            .with_protocol_id(PROTOCOL_ID)
+            .with_key(PRIVATE_KEY),
+    );
+
+    // `ServerUdpIo` exige `Server`, qu'il ajoute lui-même, et `LocalAddr`, qui
+    // doit être présent avant le démarrage.
+    let server = commands
+        .spawn((
+            Name::new("Server"),
+            netcode,
+            LocalAddr(config.bind),
+            ServerUdpIo::default(),
+        ))
+        .id();
+
+    commands.trigger(Start { entity: server });
+
     info!(
         "Serveur en écoute sur {} ({} ticks/s)",
         config.bind, config.tick_rate
     );
+}
+
+/// Un client vient d'ouvrir un lien : on lui branche l'envoi de réplication.
+///
+/// C'est plus tôt que la connexion proprement dite ([`on_connected`]) : le
+/// handshake netcode n'a pas encore eu lieu. Sans `ReplicationSender`, rien ne
+/// serait jamais envoyé à ce client.
+fn on_link(link: On<Add, LinkOf>, mut commands: Commands) {
+    commands
+        .entity(link.entity)
+        .insert((Name::new("ClientOf"), ReplicationSender));
+}
+
+/// Un client a terminé son handshake : on lui donne un joueur dans le monde.
+fn on_connected(
+    connected: On<Add, Connected>,
+    clients: Query<&RemoteId, With<ClientOf>>,
+    world: Res<GameWorld>,
+    mut counter: ResMut<SpawnCounter>,
+    mut commands: Commands,
+) {
+    // L'observer voit toutes les entités `Connected` ; seules celles marquées
+    // `ClientOf` sont des clients de ce serveur.
+    let Ok(remote) = clients.get(connected.entity) else {
+        return;
+    };
+    let peer = remote.0;
+
+    let index = counter.0;
+    let spawn = world.spawn_point(index);
+    counter.0 += 1;
+
+    commands.spawn((
+        Name::new("Player"),
+        PlayerId(peer),
+        player_color(index),
+        PlayerBundle::new(spawn, Speed::DEFAULT),
+        // Tout le monde voit le joueur…
+        Replicate::to_clients(NetworkTarget::All),
+        // …mais seul son propriétaire le prédit ; les autres l'interpolent.
+        PredictionTarget::to_clients(NetworkTarget::Single(peer)),
+        InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(peer)),
+        // `SessionBased` : le joueur disparaît de lui-même à la déconnexion.
+        ControlledBy {
+            owner: connected.entity,
+            lifetime: Lifetime::SessionBased,
+        },
+    ));
+
+    info!("Joueur {peer:?} connecté, apparu en {spawn:?}");
+}
+
+fn on_disconnected(
+    disconnected: On<Add, Disconnected>,
+    clients: Query<&RemoteId, With<ClientOf>>,
+) {
+    if let Ok(remote) = clients.get(disconnected.entity) {
+        info!("Joueur {:?} déconnecté", remote.0);
+    }
 }

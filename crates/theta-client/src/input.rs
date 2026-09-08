@@ -1,17 +1,21 @@
 use bevy::prelude::*;
-use theta_core::MoveIntent;
+use lightyear::prelude::input::client::InputSystems;
+use lightyear::prelude::input::native::{ActionState, InputMarker};
+use theta_protocole::MoveInput;
 
-use crate::LocalPlayer;
-
-/// Traduit les entrées clavier en [`MoveIntent`] sur le joueur local.
+/// Traduit les entrées clavier en [`MoveInput`] sur le joueur local.
 pub(crate) struct InputPlugin;
 
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<KeyBindings>()
-            // Avant `FixedUpdate`, pour que le mouvement du tick lise
-            // une intention à jour.
-            .add_systems(FixedPreUpdate, gather_move_intent);
+            // `WriteClientInputs` est le moment prévu par lightyear pour écrire
+            // l'`ActionState` : c'est juste avant qu'il ne soit bufferisé, puis
+            // envoyé au serveur et rejoué en cas de rollback.
+            .add_systems(
+                FixedPreUpdate,
+                gather_move_input.in_set(InputSystems::WriteClientInputs),
+            );
     }
 }
 
@@ -35,8 +39,8 @@ impl Default for KeyBindings {
     }
 }
 
-fn gather_move_intent(
-    mut players: Query<&mut MoveIntent, With<LocalPlayer>>,
+fn gather_move_input(
+    mut players: Query<&mut ActionState<MoveInput>, With<InputMarker<MoveInput>>>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<KeyBindings>,
 ) {
@@ -57,7 +61,7 @@ fn gather_move_intent(
 
     let dir = dir.normalize_or_zero();
 
-    for mut intent in &mut players {
-        intent.0 = dir;
+    for mut action in &mut players {
+        action.0 = MoveInput(dir);
     }
 }
