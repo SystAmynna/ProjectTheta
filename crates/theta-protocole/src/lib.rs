@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use bevy::ecs::entity::{EntityMapper, MapEntities};
 use bevy::prelude::*;
 use lightyear::prelude::*;
@@ -8,11 +6,9 @@ use lightyear_avian2d::plugin::{AvianReplicationMode, LightyearAvianPlugin};
 use serde::{Deserialize, Serialize};
 use theta_core::{MoveIntent, Player, PlayerColor, PlayerSystems};
 
-/// Fréquence de simulation, en ticks par seconde.
-///
-/// Client et serveur **doivent** utiliser la même valeur : c'est elle qui
-/// définit l'unité de temps du réseau (un tick = un input).
-pub const TICK_HZ: f64 = 64.0;
+// La cadence de simulation vit dans `theta-core` : le protocole ne fait que la
+// relayer, pour qu'aucun binaire n'ait à choisir entre deux sources.
+pub use theta_core::{TICK_HZ, tick_duration};
 
 /// Identifiant de protocole : deux binaires qui ne le partagent pas ne peuvent
 /// pas se connecter. À incrémenter quand le protocole devient incompatible.
@@ -24,11 +20,6 @@ pub const PROTOCOL_ID: u64 = 0x7E7A_0001;
 /// serveur et les clients doivent recevoir un `ConnectToken` d'un service
 /// d'authentification.
 pub const PRIVATE_KEY: [u8; 32] = [0; 32];
-
-/// Durée d'un tick, dérivée de [`TICK_HZ`].
-pub fn tick_duration() -> Duration {
-    Duration::from_secs_f64(1.0 / TICK_HZ)
-}
 
 /// Identité réseau d'un joueur, répliquée à tous.
 ///

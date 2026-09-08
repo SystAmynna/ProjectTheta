@@ -1,10 +1,42 @@
 use avian2d::prelude::{Position, Rotation};
 use bevy::prelude::*;
+use bevy::window::{PresentMode, WindowResolution};
 use theta_core::{Player, PlayerColor};
 
 pub mod assets;
 
 pub use assets::{ASSET_ROOT_ENV, GameAssets, asset_plugin, asset_root};
+
+/// [`WindowPlugin`] du client : la fenêtre de jeu.
+///
+/// `PresentMode::AutoNoVsync` découple le rendu de la dalle : la boucle
+/// `Update` — donc les sprites, la caméra et l'interpolation — tourne aussi vite
+/// que la machine le permet, au-delà du taux de rafraîchissement. La simulation,
+/// elle, reste à `theta_core::TICK_HZ` : rien de ce qui est fait ici ne peut la
+/// faire varier. Repasser à `PresentMode::AutoVsync` suffit à réactiver la
+/// synchronisation verticale (moins de déchirement, FPS bornés par l'écran).
+///
+/// À passer à `DefaultPlugins`, comme [`asset_plugin`] :
+///
+/// ```no_run
+/// # use bevy::prelude::*;
+/// App::new().add_plugins(
+///     DefaultPlugins
+///         .set(theta_render::asset_plugin())
+///         .set(theta_render::window_plugin()),
+/// );
+/// ```
+pub fn window_plugin() -> WindowPlugin {
+    WindowPlugin {
+        primary_window: Some(Window {
+            title: "ProjectTheta".to_string(),
+            resolution: WindowResolution::new(1280, 720),
+            present_mode: PresentMode::AutoNoVsync,
+            ..default()
+        }),
+        ..default()
+    }
+}
 
 /// Rendu : caméra, chargement des assets et représentation visuelle des
 /// entités de jeu.

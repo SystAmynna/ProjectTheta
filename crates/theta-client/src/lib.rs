@@ -2,6 +2,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::prelude::*;
+use lightyear::frame_interpolation::FrameInterpolate;
 use lightyear::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::input::native::InputMarker;
@@ -111,6 +112,14 @@ fn on_predicted(
         PlayerSimulationBundle::new(Speed::DEFAULT),
         // Apporte, par composants requis, l'`InputBuffer` puis l'`ActionState`.
         InputMarker::<MoveInput>::default(),
+        // Le joueur prédit n'avance qu'en `FixedUpdate`, soit 60 fois par
+        // seconde : sans ce marqueur, il sauterait d'un tick à l'autre dès que
+        // l'écran affiche plus d'images que ça. Lightyear l'affiche alors avec
+        // un tick de retard, interpolé selon l'overstep de `Time<Fixed>`, en
+        // `PostUpdate` et donc à chaque image. Le plugin qui l'exploite est
+        // déjà installé par `LightyearAvianPlugin`, qui enregistre la
+        // correction visuelle de `Position` et `Rotation`.
+        FrameInterpolate,
     ));
 
     info!("Joueur local prêt");

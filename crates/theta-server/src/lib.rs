@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 use lightyear::prelude::server::*;
-use theta_core::{GameWorld, PlayerBundle, Speed};
+use theta_core::{GameWorld, PlayerBundle, Speed, TICK_HZ};
 use theta_protocole::{PRIVATE_KEY, PROTOCOL_ID, PlayerId, player_color};
 
 /// Paramètres d'exécution du serveur, fournis par le binaire.
@@ -11,8 +11,6 @@ use theta_protocole::{PRIVATE_KEY, PROTOCOL_ID, PlayerId, player_color};
 pub struct ServerConfig {
     /// Adresse d'écoute.
     pub bind: SocketAddr,
-    /// Fréquence de simulation, en ticks par seconde.
-    pub tick_rate: u32,
 }
 
 /// Nombre de joueurs déjà accueillis, pour répartir les points d'apparition.
@@ -59,10 +57,7 @@ fn start_listening(config: Res<ServerConfig>, mut commands: Commands) {
 
     commands.trigger(Start { entity: server });
 
-    info!(
-        "Serveur en écoute sur {} ({} ticks/s)",
-        config.bind, config.tick_rate
-    );
+    info!("Serveur en écoute sur {} ({TICK_HZ} ticks/s)", config.bind);
 }
 
 /// Un client vient d'ouvrir un lien : on lui branche l'envoi de réplication.
