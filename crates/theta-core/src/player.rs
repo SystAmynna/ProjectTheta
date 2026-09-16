@@ -1,13 +1,26 @@
-use avian2d::prelude::{Collider, LinearVelocity, Position, RigidBody, Rotation};
+use avian2d::prelude::{
+    Collider, CollisionLayers, CustomPositionIntegration, LinearVelocity, MoveAndSlide,
+    MoveAndSlideConfig, MoveAndSlideHitResponse, Position, RigidBody, Rotation,
+    SpatialQueryFilter,
+};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
+
+use crate::layers::GameLayer;
 
 /// Systèmes de gameplay du joueur, partagés entre client et serveur.
 pub(crate) struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, apply_move_intent.in_set(PlayerSystems::Move));
+        app.configure_sets(FixedUpdate, PlayerSystems::Move.before(PlayerSystems::Collide))
+            .add_systems(
+                FixedUpdate,
+                (
+                    apply_move_intent.in_set(PlayerSystems::Move),
+                    slide_players.in_set(PlayerSystems::Collide),
+                ),
+            );
     }
 }
 
@@ -15,8 +28,10 @@ impl Plugin for PlayerPlugin {
 /// autour sans connaître les systèmes eux-mêmes.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlayerSystems {
-    /// Traduction de [`MoveIntent`] en vélocité.
+    /// Traduction de [`MoveIntent`] en vélocité désirée.
     Move,
+    /// Déplacement effectif, qui glisse le long du terrain.
+    Collide,
 }
 
 /// Marque une entité contrôlable comme joueur.
@@ -73,9 +88,11 @@ impl MoveIntent {
 /// Composants de **simulation** d'un joueur : ceux qui ne viennent pas du
 /// réseau et qu'il faut donc poser à la main de chaque côté qui simule.
 ///
-/// Le joueur est un corps **cinématique** : rien ne le pousse, c'est
-/// [`apply_move_intent`] qui fixe sa vélocité et Avian qui l'intègre en
-/// [`Position`].
+/// Le joueur est un corps **cinématique** : rien ne le pousse, et Avian ne
+/// l'arrête pas non plus contre un mur — un cinématique traverse les statiques.
+/// C'est donc [`slide_players`] qui le déplace, en glissant le long du terrain ;
+/// `CustomPositionIntegration` empêche Avian d'intégrer la vélocité une seconde
+/// fois par-dessus.
 ///
 /// Ce bundle n'a de sens que sur les entités simulées : celle du serveur et sa
 /// copie prédite côté client. Il ne doit **jamais** être posé sur une entité
@@ -88,6 +105,8 @@ pub struct PlayerSimulationBundle {
     pub intent: MoveIntent,
     pub body: RigidBody,
     pub collider: Collider,
+    pub layers: CollisionLayers,
+    pub integration: CustomPositionIntegration,
 }
 
 impl PlayerSimulationBundle {
@@ -101,6 +120,8 @@ impl PlayerSimulationBundle {
             intent: MoveIntent::default(),
             body: RigidBody::Kinematic,
             collider: Collider::circle(Self::RADIUS),
+            layers: CollisionLayers::new(GameLayer::Player, GameLayer::Terrain),
+            integration: CustomPositionIntegration,
         }
     }
 }
@@ -129,15 +150,88 @@ impl PlayerBundle {
     }
 }
 
-/// Traduit l'intention de déplacement de chaque joueur en vélocité.
+/// Traduit l'intention de déplacement de chaque joueur en vélocité désirée.
 ///
-/// L'intégration en position est le travail d'Avian : ce système ne touche ni
-/// à `Position` ni à `Transform`.
+/// Ce système ne touche ni à `Position` ni à `Transform` : c'est
+/// [`slide_players`] qui en fait un déplacement.
 fn apply_move_intent(
     mut players: Query<(&mut LinearVelocity, &Speed, &MoveIntent), With<Player>>,
 ) {
     for (mut velocity, speed, intent) in &mut players {
         velocity.0 = intent.direction() * speed.0;
+    }
+}
+
+/// Un joueur simulé ici : celui du serveur, ou le joueur prédit du client. Les
+/// joueurs interpolés n'ont pas de `MoveIntent` et ne doivent pas être déplacés.
+type SimulatedPlayer = (With<Player>, With<MoveIntent>);
+
+/// Ce que [`slide_players`] écrit sur les joueurs simulés.
+type SimulatedPlayers<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static mut Position, &'static mut LinearVelocity),
+    SimulatedPlayer,
+>;
+
+/// Déplace chaque joueur simulé selon sa vélocité, en glissant le long du terrain.
+///
+/// `MoveAndSlide` avance le collider jusqu'au premier obstacle, puis projette la
+/// vitesse restante sur le mur pour longer celui-ci. La vélocité écrite en retour
+/// est cette vitesse projetée : elle ne pointe jamais dans un mur, sans quoi le
+/// joueur y serait repoussé à chaque tick et, côté client, divergerait du serveur
+/// en déclenchant des rollbacks en continu.
+///
+/// Seul [`GameLayer::Terrain`] est pris en compte (voir [`GameLayer`]). Le calcul
+/// est déterministe : rejoué lors d'un rollback, il redonne la même position.
+///
+/// `MoveAndSlide` lit `Position` sur tous les colliders, joueurs compris : on ne
+/// peut pas tenir en même temps un accès mutable aux joueurs, d'où le
+/// `ParamSet` et les trois temps — relever, calculer, écrire.
+fn slide_players(
+    mut params: ParamSet<(SimulatedPlayers, MoveAndSlide)>,
+    time: Res<Time>,
+    mut moves: Local<Vec<(Entity, Vec2, Vec2)>>,
+) {
+    let filter = SpatialQueryFilter::from_mask(GameLayer::Terrain);
+    let config = MoveAndSlideConfig::default();
+
+    moves.clear();
+    moves.extend(
+        params
+            .p0()
+            .iter()
+            .map(|(entity, _, velocity)| (entity, Vec2::ZERO, velocity.0)),
+    );
+
+    let move_and_slide = params.p1();
+    moves.retain_mut(|(entity, destination, velocity)| {
+        // Un joueur dont le collider n'est pas encore attaché reste où il est.
+        let Ok((collider, position, rotation, _)) = move_and_slide.colliders.get(*entity) else {
+            return false;
+        };
+
+        let out = move_and_slide.move_and_slide(
+            collider,
+            position.0,
+            rotation.as_radians(),
+            *velocity,
+            time.delta(),
+            &config,
+            &filter,
+            |_| MoveAndSlideHitResponse::Accept,
+        );
+        *destination = out.position;
+        *velocity = out.projected_velocity;
+        true
+    });
+
+    let mut players = params.p0();
+    for &(entity, destination, velocity) in moves.iter() {
+        if let Ok((_, mut position, mut linear)) = players.get_mut(entity) {
+            position.0 = destination;
+            linear.0 = velocity;
+        }
     }
 }
 

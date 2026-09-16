@@ -6,6 +6,7 @@ members = [
     "crates/theta-client",
     "crates/theta-server",
     "crates/theta-render",
+    "crates/theta-worldgen",
 ]
 
 [workspace.package]
@@ -20,6 +21,7 @@ theta-protocole = { path = "crates/theta-protocole" }
 theta-client = { path = "crates/theta-client" }
 theta-server = { path = "crates/theta-server" }
 theta-render = { path = "crates/theta-render" }
+theta-worldgen = { path = "crates/theta-worldgen" }
 
 # Dépendances externes
 bevy = { version = "0.19", default-features = false, features = [

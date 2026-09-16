@@ -3,14 +3,21 @@ use std::net::SocketAddr;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 use lightyear::prelude::server::*;
-use theta_core::{GameWorld, PlayerBundle, Speed, TICK_HZ};
+use theta_core::{PlayerBundle, Speed, TICK_HZ, spawn_point};
 use theta_protocole::{PRIVATE_KEY, PROTOCOL_ID, PlayerId, player_color};
+use theta_worldgen::WorldGenerator;
+
+mod terrain;
+
+pub use terrain::{SUBSCRIBE_RADIUS, UNSUBSCRIBE_RADIUS};
 
 /// Paramètres d'exécution du serveur, fournis par le binaire.
 #[derive(Resource, Debug, Clone)]
 pub struct ServerConfig {
     /// Adresse d'écoute.
     pub bind: SocketAddr,
+    /// Graine du monde : la même graine redonne le même terrain.
+    pub seed: u64,
 }
 
 /// Nombre de joueurs déjà accueillis, pour répartir les points d'apparition.
@@ -28,12 +35,20 @@ pub struct ServerPlugin;
 
 impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SpawnCounter>()
-            .add_systems(Startup, start_listening)
+        app.add_plugins(terrain::TerrainPlugin)
+            .init_resource::<SpawnCounter>()
+            .add_systems(Startup, (create_world, start_listening))
             .add_observer(on_link)
             .add_observer(on_connected)
             .add_observer(on_disconnected);
     }
+}
+
+/// Prépare le générateur du monde. Aucun chunk n'est créé d'avance : chacun
+/// l'est au moment où un joueur s'en approche.
+fn create_world(config: Res<ServerConfig>, mut commands: Commands) {
+    commands.insert_resource(WorldGenerator::new(config.seed));
+    info!("Monde généré depuis la graine {}", config.seed);
 }
 
 /// Ouvre l'écoute UDP et démarre le serveur.
@@ -64,18 +79,20 @@ fn start_listening(config: Res<ServerConfig>, mut commands: Commands) {
 ///
 /// C'est plus tôt que la connexion proprement dite ([`on_connected`]) : le
 /// handshake netcode n'a pas encore eu lieu. Sans `ReplicationSender`, rien ne
-/// serait jamais envoyé à ce client.
+/// serait jamais envoyé à ce client. Ses abonnements au terrain partent vides :
+/// ils se remplissent dès que son joueur existe.
 fn on_link(link: On<Add, LinkOf>, mut commands: Commands) {
-    commands
-        .entity(link.entity)
-        .insert((Name::new("ClientOf"), ReplicationSender));
+    commands.entity(link.entity).insert((
+        Name::new("ClientOf"),
+        ReplicationSender,
+        terrain::ChunkSubscriptions::default(),
+    ));
 }
 
 /// Un client a terminé son handshake : on lui donne un joueur dans le monde.
 fn on_connected(
     connected: On<Add, Connected>,
     clients: Query<&RemoteId, With<ClientOf>>,
-    world: Res<GameWorld>,
     mut counter: ResMut<SpawnCounter>,
     mut commands: Commands,
 ) {
@@ -87,7 +104,7 @@ fn on_connected(
     let peer = remote.0;
 
     let index = counter.0;
-    let spawn = world.spawn_point(index);
+    let spawn = spawn_point(index);
     counter.0 += 1;
 
     commands.spawn((

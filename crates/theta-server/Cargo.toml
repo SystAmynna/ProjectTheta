@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 theta-core = { workspace = true }
 theta-protocole = { workspace = true }
+theta-worldgen = { workspace = true }
 avian2d = { workspace = true }
 bevy = { workspace = true }
 lightyear = { workspace = true, features = ["server"] }

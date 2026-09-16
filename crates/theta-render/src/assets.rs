@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use bevy::asset::AssetPlugin;
+use bevy::image::{ImageArrayLayout, ImageLoaderSettings};
 use bevy::prelude::*;
 
 /// Variable d'environnement permettant de forcer le répertoire des assets.
@@ -54,11 +55,18 @@ pub fn asset_plugin() -> AssetPlugin {
     }
 }
 
+/// Fichier du tileset : une bande verticale de tiles de 32 × 32, dans l'ordre de
+/// [`TilesetIndex`](crate::terrain::TilesetIndex).
+const TILESET_PATH: &str = "tiles.png";
+
 /// Handles des assets chargés une fois pour toutes au démarrage.
 #[derive(Resource, Debug, Clone)]
 pub struct GameAssets {
     /// Sprite du joueur.
     pub player: Handle<Image>,
+    /// Tiles du terrain, en *array texture* : une couche par tile, comme
+    /// l'attend `TilemapChunk`.
+    pub tileset: Handle<Image>,
 }
 
 pub(crate) struct AssetsPlugin;
@@ -74,6 +82,14 @@ fn load_assets(mut commands: Commands, assets: Res<AssetServer>) {
 
     commands.insert_resource(GameAssets {
         player: assets.load("a.png"),
+        tileset: assets
+            .load_builder()
+            .with_settings(|settings: &mut ImageLoaderSettings| {
+                settings.array_layout = Some(ImageArrayLayout::RowCount {
+                    rows: crate::terrain::TilesetIndex::COUNT,
+                });
+            })
+            .load(TILESET_PATH),
     });
 }
 
@@ -97,5 +113,10 @@ mod tests {
     #[test]
     fn asset_root_contains_player_sprite() {
         assert!(asset_root().join("a.png").is_file());
+    }
+
+    #[test]
+    fn asset_root_contains_tileset() {
+        assert!(asset_root().join(TILESET_PATH).is_file());
     }
 }

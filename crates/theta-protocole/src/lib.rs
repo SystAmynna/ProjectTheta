@@ -4,7 +4,7 @@ use lightyear::prelude::*;
 use lightyear::prelude::input::native::{ActionState, InputPlugin};
 use lightyear_avian2d::plugin::{AvianReplicationMode, LightyearAvianPlugin};
 use serde::{Deserialize, Serialize};
-use theta_core::{MoveIntent, Player, PlayerColor, PlayerSystems};
+use theta_core::{ChunkCoord, MoveIntent, Player, PlayerColor, PlayerSystems, TileKind};
 
 // La cadence de simulation vit dans `theta-core` : le protocole ne fait que la
 // relayer, pour qu'aucun binaire n'ait à choisir entre deux sources.
@@ -12,7 +12,7 @@ pub use theta_core::{TICK_HZ, tick_duration};
 
 /// Identifiant de protocole : deux binaires qui ne le partagent pas ne peuvent
 /// pas se connecter. À incrémenter quand le protocole devient incompatible.
-pub const PROTOCOL_ID: u64 = 0x7E7A_0001;
+pub const PROTOCOL_ID: u64 = 0x7E7A_0003;
 
 /// Clé privée du handshake netcode.
 ///
@@ -86,6 +86,43 @@ impl MapEntities for MoveInput {
     fn map_entities<M: EntityMapper>(&mut self, _mapper: &mut M) {}
 }
 
+/// Canal du terrain : fiable et **ordonné**, du serveur vers les clients.
+///
+/// L'ordre est ce qui rend le terrain cohérent : pour un chunk donné, le client
+/// reçoit toujours son contenu, puis ses modifications, puis l'ordre de l'oublier
+/// — jamais une modification avant le contenu qu'elle modifie.
+pub struct TerrainChannel;
+
+/// Mise à jour du terrain d'un client, décidée par le serveur.
+///
+/// Le serveur abonne chaque client aux chunks proches de son joueur : il envoie
+/// un chunk en entier quand il entre dans le rayon, ne transmet ensuite que ses
+/// modifications, et le fait oublier quand il en sort.
+///
+/// Un seul type de message pour les trois cas, et non trois : lightyear range
+/// chaque type dans sa propre file de réception, et l'ordre entre, par exemple,
+/// un `Unload` suivi d'un nouveau `Snapshot` du même chunk serait perdu.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TerrainUpdate {
+    /// Contenu complet d'un chunk qui entre dans le rayon du client, en
+    /// row-major, y vers le haut (`CHUNK_AREA` tiles).
+    Snapshot {
+        chunk: ChunkCoord,
+        tiles: Vec<TileKind>,
+    },
+    /// Tiles modifiées pendant un tick, par index local dans le chunk.
+    ///
+    /// Chaque entrée signifie « la tile devient » : l'appliquer deux fois ne
+    /// change rien.
+    Edits {
+        chunk: ChunkCoord,
+        edits: Vec<(u16, TileKind)>,
+    },
+    /// Le chunk est sorti du rayon du client : il doit l'oublier. Le serveur ne
+    /// lui en enverra plus rien, sauf un nouveau `Snapshot` s'il y revient.
+    Unload { chunk: ChunkCoord },
+}
+
 /// Protocole réseau partagé : composants répliqués, inputs et messages
 /// communs au client et au serveur (lightyear).
 ///
@@ -112,6 +149,18 @@ impl Plugin for ProtocolPlugin {
         });
 
         app.add_plugins(InputPlugin::<MoveInput>::default());
+
+        // Le terrain ne passe pas par la réplication d'entités : un chunk y
+        // serait renvoyé en entier à chaque modification, et son `RigidBody`
+        // attirerait la réplication d'Avian. Il voyage en messages, sur un canal
+        // à lui.
+        app.add_channel::<TerrainChannel>(ChannelSettings {
+            mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
+            ..default()
+        })
+        .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<TerrainUpdate>()
+            .add_direction(NetworkDirection::ServerToClient);
 
         // `Player` est répliqué pour que le client sache qu'une entité interpolée
         // — qui n'a aucun composant de simulation — est bien un joueur.

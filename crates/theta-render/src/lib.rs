@@ -1,11 +1,21 @@
+use avian2d::physics_transform::PhysicsTransformSystems;
 use avian2d::prelude::{Position, Rotation};
 use bevy::prelude::*;
 use bevy::window::{PresentMode, WindowResolution};
 use theta_core::{Player, PlayerColor};
 
 pub mod assets;
+pub mod terrain;
 
 pub use assets::{ASSET_ROOT_ENV, GameAssets, asset_plugin, asset_root};
+
+/// [`ImagePlugin`] du client : filtrage au plus proche, pour que les tiles en
+/// pixel art restent nettes au lieu d'être lissées.
+///
+/// À passer à `DefaultPlugins`, comme [`asset_plugin`] et [`window_plugin`].
+pub fn image_plugin() -> ImagePlugin {
+    ImagePlugin::default_nearest()
+}
 
 /// [`WindowPlugin`] du client : la fenêtre de jeu.
 ///
@@ -50,14 +60,41 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(assets::AssetsPlugin)
+        app.add_plugins((assets::AssetsPlugin, terrain::TerrainRenderPlugin))
             .add_systems(Startup, spawn_camera)
-            .add_systems(Update, attach_player_sprite);
+            .add_systems(Update, attach_player_sprite)
+            // Après l'écriture de `Transform` depuis `Position` (interpolation
+            // et correction comprises), et avant sa propagation : la caméra
+            // colle ainsi à l'image du joueur telle qu'elle sera affichée.
+            .add_systems(
+                PostUpdate,
+                follow_camera_target
+                    .after(PhysicsTransformSystems::PositionToTransform)
+                    .before(TransformSystems::Propagate),
+            );
     }
 }
 
+/// Entité que la caméra suit : le joueur local, marqué par `theta-client`.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct CameraTarget;
+
 fn spawn_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
+}
+
+/// Centre la caméra sur sa cible.
+fn follow_camera_target(
+    target: Query<&Transform, (With<CameraTarget>, Without<Camera2d>)>,
+    mut cameras: Query<&mut Transform, With<Camera2d>>,
+) {
+    let Ok(target) = target.single() else {
+        return;
+    };
+    for mut camera in &mut cameras {
+        camera.translation.x = target.translation.x;
+        camera.translation.y = target.translation.y;
+    }
 }
 
 /// Un joueur prêt à être affiché mais qui n'a pas encore de sprite.

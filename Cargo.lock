@@ -6872,6 +6872,15 @@ dependencies = [
  "lightyear",
  "theta-core",
  "theta-protocole",
+ "theta-worldgen",
+]
+
+[[package]]
+name = "theta-worldgen"
+version = "0.0.2"
+dependencies = [
+ "bevy",
+ "theta-core",
 ]
 
 [[package]]

@@ -1,0 +1,9 @@
+[package]
+name = "theta-worldgen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+theta-core = { workspace = true }
+bevy = { workspace = true }

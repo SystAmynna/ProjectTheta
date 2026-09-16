@@ -1,20 +1,29 @@
 use std::time::Duration;
 
 use avian2d::{
-    PhysicsPlugins, dynamics::integrator::Gravity, physics_transform::PhysicsTransformPlugin,
-    prelude::PhysicsInterpolationPlugin,
+    PhysicsPlugins,
+    dynamics::integrator::Gravity,
+    physics_transform::PhysicsTransformPlugin,
+    prelude::{ColliderMarker, PhysicsInterpolationPlugin},
 };
 use bevy::prelude::*;
 
 //pub mod data;
+pub mod layers;
 pub mod player;
+pub mod terrain;
 pub mod world;
 
 //pub use data::{ENEMIES, ENTITIES, EQUIPMENTS, ITEMS, Id, WEAPONS};
+pub use layers::GameLayer;
 pub use player::{
     MoveIntent, Player, PlayerBundle, PlayerColor, PlayerSimulationBundle, PlayerSystems, Speed,
 };
-pub use world::GameWorld;
+pub use terrain::{
+    ChunkCoord, ChunkTiles, Terrain, TerrainChunk, TerrainIndex, TerrainSystems, TileCoord,
+    TileEdit, TileKind, spawn_chunk,
+};
+pub use world::{SPAWN_RADIUS, spawn_point};
 
 /// Fréquence de simulation, en ticks par seconde.
 ///
@@ -63,12 +72,24 @@ impl Plugin for CorePlugin {
         app.insert_resource(Time::<Fixed>::from_duration(tick_duration()));
 
         app.add_plugins(
+            // Le monde se mesure en pixels : l'unité de longueur ramène les
+            // tolérances d'Avian (marge de `MoveAndSlide`, seuils du solveur) à
+            // l'échelle d'une tile plutôt qu'à celle d'un pixel.
             PhysicsPlugins::default()
+                .with_length_unit(terrain::TILE_SIZE)
                 .build()
                 .disable::<PhysicsTransformPlugin>()
                 .disable::<PhysicsInterpolationPlugin>(),
         )
         .insert_resource(Gravity(Vec2::ZERO))
-        .add_plugins((world::WorldPlugin, player::PlayerPlugin));
+        .add_plugins((terrain::TerrainPlugin, player::PlayerPlugin));
+
+        // Avian tire l'échelle d'un collider de son `GlobalTransform`. Sans
+        // `PhysicsTransformPlugin`, rien ne l'ajoute plus : un joueur, qui n'a
+        // qu'une `Position`, aurait un collider d'échelle nulle et traverserait
+        // les murs jusqu'à son centre. `LightyearAvianPlugin` fait le même
+        // enregistrement ; le premier arrivé l'emporte, l'autre est sans effet.
+        app.try_register_required_components::<ColliderMarker, Transform>()
+            .ok();
     }
 }

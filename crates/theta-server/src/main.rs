@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::log::LogPlugin;
@@ -17,13 +18,19 @@ struct Cli {
     /// Adresse d'écoute (`ip:port`).
     #[arg(long, default_value = "0.0.0.0:5000")]
     bind: SocketAddr,
+    /// Graine du monde. Tirée de l'heure si absente.
+    #[arg(long)]
+    seed: Option<u64>,
     // Pas d'option de cadence : `theta_core::TICK_HZ` fait loi, sans quoi un
     // serveur lancé autrement parlerait un autre protocole que ses clients.
 }
 
 fn main() {
     let cli = Cli::parse();
-    let config = ServerConfig { bind: cli.bind };
+    let config = ServerConfig {
+        bind: cli.bind,
+        seed: cli.seed.unwrap_or_else(random_seed),
+    };
 
     // Le serveur n'affiche rien : sa boucle principale peut battre au rythme de
     // la simulation, une image par tick.
@@ -43,4 +50,13 @@ fn main() {
         .add_plugins(ServerPlugin)
         .insert_resource(config)
         .run();
+}
+
+/// Graine par défaut : l'heure courante, pour qu'un serveur lancé sans `--seed`
+/// ne génère pas toujours le même monde.
+fn random_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or_default()
 }

@@ -9,21 +9,23 @@ binaire ne dépend que des crates dont il a besoin.
 
 | Crate | Type | Rôle |
 | --- | --- | --- |
-| `theta-core` | lib | Gameplay commun client/serveur : physique, mouvement du joueur. Ne lit aucune entrée. |
+| `theta-core` | lib | Gameplay commun client/serveur : physique, mouvement du joueur, **terrain en chunks** (sans génération). Ne lit aucune entrée. |
 | `theta-protocole` | lib | Protocole réseau partagé (composants répliqués, inputs, messages). |
-| `theta-render` | lib | Rendu : caméra, sprites et **gestion des assets**. Uniquement côté client. |
-| `theta-client` | lib + bin `theta-client` | Saisie clavier, connexion au serveur, joueur local. |
-| `theta-server` | lib + bin `theta-server` | Simulation autoritaire, sans fenêtre ni rendu. |
+| `theta-render` | lib | Rendu : caméra, sprites, tilemap et **gestion des assets**. Uniquement côté client. |
+| `theta-worldgen` | lib | **Génération du monde**. Uniquement côté serveur. |
+| `theta-client` | lib + bin `theta-client` | Saisie clavier, connexion au serveur, joueur local, réception du terrain. |
+| `theta-server` | lib + bin `theta-server` | Simulation autoritaire, génération à la demande et diffusion du terrain, sans fenêtre ni rendu. |
 
 Dépendances :
 
 ```
 theta-client (bin) ──> theta-client, theta-render, theta-protocole, theta-core
-theta-server (bin) ──> theta-server, theta-protocole, theta-core
+theta-server (bin) ──> theta-server, theta-worldgen, theta-protocole, theta-core
 ```
 
 Le serveur ne dépend jamais de `theta-render` : il ne compile ni ne lie
-`bevy_winit`, `wgpu`, etc.
+`bevy_winit`, `wgpu`, etc. Symétriquement, le client ne dépend jamais de
+`theta-worldgen` : il ne sait pas générer le monde, il ne fait que le recevoir.
 
 ## Lancer
 
@@ -31,8 +33,8 @@ Le serveur ne dépend jamais de `theta-render` : il ne compile ni ne lie
 cargo run -p theta-client              # client (fenêtre de jeu)
 cargo run -p theta-client -- --server 127.0.0.1:5000
 
-cargo run -p theta-server              # serveur headless
-cargo run -p theta-server -- --bind 0.0.0.0:5000
+cargo run -p theta-server              # serveur headless, graine tirée de l'heure
+cargo run -p theta-server -- --bind 0.0.0.0:5000 --seed 42
 ```
 
 ## Assets
@@ -114,6 +116,7 @@ reçoit un joueur, prédit le sien et interpole ceux des autres.
 | Prédiction | client, son joueur | Le clavier agit immédiatement ; le serveur corrige par rollback. |
 | Interpolation | client, les autres joueurs | Mouvement lissé entre deux états reçus. |
 | Inputs | client → serveur | `MoveInput`, un vecteur de direction par tick. |
+| Terrain | serveur → client | `TerrainUpdate` sur `TerrainChannel` (fiable, ordonné) : chunk complet, modifications, oubli. Voir [Le monde](#le-monde). |
 
 Les valeurs sur lesquelles les deux camps doivent s'accorder vivent dans le
 code commun, jamais dans les binaires : `PROTOCOL_ID` et `PRIVATE_KEY` dans
@@ -179,14 +182,29 @@ La logique est coupée en trois, chacune ignorant l'étage du dessus :
   il recopie l'`ActionState` du tick dans le `MoveIntent` de `theta-core`. Le
   même système tourne des deux côtés — avec l'entrée saisie sur le client, avec
   l'entrée reçue sur le serveur.
-- **`theta-core`** possède le mouvement (`player::apply_move_intent`). Il lit
-  `MoveIntent` et en fait une `LinearVelocity`, en pixels par seconde. Il ignore
-  complètement l'origine de cette intention.
+- **`theta-core`** possède le mouvement. `player::apply_move_intent` lit
+  `MoveIntent` et en fait une `LinearVelocity` désirée, en pixels par seconde ;
+  `player::slide_players` en fait un déplacement qui glisse le long du terrain.
+  Il ignore complètement l'origine de cette intention.
 
 ```
 clavier ──> ActionState<MoveInput> ──> MoveIntent ──> LinearVelocity ──> Position ──> Transform
-(client)        (protocole)            (protocole)      (core)          (Avian)      (rendu)
+(client)        (protocole)            (protocole)      (core)        (core, MoveAndSlide)  (rendu)
 ```
+
+Le joueur est un corps **cinématique**, et Avian n'arrête pas un cinématique
+contre un statique : il le ferait traverser les murs. `slide_players` le déplace
+donc lui-même avec `MoveAndSlide` (le « collide and slide » d'Avian), qui avance
+jusqu'au premier mur puis projette la vitesse restante le long de celui-ci. Le
+joueur porte `CustomPositionIntegration`, pour qu'Avian n'intègre pas la
+vélocité une seconde fois. La vélocité réécrite est la vitesse projetée : elle
+ne pointe jamais dans un mur, sans quoi le joueur y serait repoussé à chaque
+tick et, côté client, divergerait du serveur en déclenchant des rollbacks.
+
+Seule la couche `GameLayer::Terrain` compte pour ce mouvement : les joueurs ne
+se bloquent pas entre eux. Côté client, seul le joueur local a un collider (les
+joueurs interpolés n'en ont pas) ; une collision entre joueurs sur le serveur
+serait imprévisible pour le client.
 
 `Position` et `Rotation` (Avian) sont la vérité de la simulation, et les
 composants effectivement répliqués ; `Transform` n'en est qu'une projection
@@ -198,14 +216,51 @@ des versions compatibles avec la prédiction.
 
 ## Le monde
 
-`theta-core::world` définit le terrain : une aire rectangulaire centrée sur
-l'origine (`GameWorld::half_extents`, 2000 × 2000 par défaut), sans décor ni
-obstacle. Il n'y vit que des joueurs.
+Le monde est **infini**, fait de tiles de 32 px (`TileKind` : sol ou mur)
+regroupées en chunks de 32 × 32 tiles (1024 px). Les trois camps s'en partagent
+la charge :
 
-- `spawn_point(index)` répartit les arrivants sur un cercle, pour que deux
-  joueurs ne se superposent jamais en apparaissant.
-- `confine_players` les y maintient. Il ne se contente pas de replacer la
-  position : il annule aussi la composante de vélocité qui pointe vers
-  l'extérieur. Sans ça, Avian réintègre la vitesse juste après et le joueur
-  ressort d'un tick à chaque frame — ce qui, côté client, diverge en permanence
-  du serveur et déclenche des rollbacks en continu.
+| Crate | Rôle |
+| --- | --- |
+| `theta-core::terrain` | Ce qu'est un chunk (`TerrainChunk`, `ChunkTiles`), son collider, l'index `TerrainIndex` et l'accès `Terrain`. **Ne génère rien.** |
+| `theta-worldgen` | `WorldGenerator` : chaque tile est une fonction pure de `(graine, coordonnée)`, un bruit fBm. Serveur uniquement. |
+| `theta-render::terrain` | Un `TilemapChunk` (Bevy) par chunk : un mesh et un draw call par chunk. |
+
+Chaque chunk est une entité qui porte ses tiles (`ChunkTiles`), un
+`RigidBody::Static` et **un seul** `Collider::voxels` : peu d'AABB pour le broad
+phase, et une forme que parry sait continue — le joueur glisse le long d'une
+rangée de tiles sans accrocher aux jointures. Client et serveur créent leurs
+chunks par le même `spawn_chunk`, et `Changed<ChunkTiles>` suffit à reconstruire
+le collider (`theta-core`) comme le rendu (`theta-render`).
+
+- `spawn_point(index)` répartit les arrivants sur un cercle de rayon
+  `SPAWN_RADIUS` ; le générateur garde ce cercle toujours praticable.
+- Une modification de terrain s'exprime par un message Bevy `TileEdit`. Seul le
+  serveur l'applique : le terrain est autoritaire, le client ne modifie jamais
+  une tile de lui-même.
+
+### Diffusion par abonnement
+
+Le terrain ne passe **pas** par la réplication d'entités de lightyear : un chunk
+y serait renvoyé en entier à chaque modification. Il voyage en messages
+`TerrainUpdate`, sur le canal fiable et ordonné `TerrainChannel` :
+
+| Message | Quand |
+| --- | --- |
+| `Snapshot { chunk, tiles }` | Le chunk entre dans le rayon d'abonnement du client : contenu complet. |
+| `Edits { chunk, edits }` | Un chunk auquel le client est abonné change : seulement les tiles modifiées du tick. |
+| `Unload { chunk }` | Le chunk sort du rayon de désabonnement : le client l'oublie. |
+
+Le serveur (`theta-server::terrain`) recalcule à chaque tick les abonnements de
+chaque client autour de son joueur : `SUBSCRIBE_RADIUS` = 1 (les 3 × 3 chunks
+autour du sien, jamais de trou visible à l'écran) et `UNSUBSCRIBE_RADIUS` = 2,
+plus large pour qu'un joueur longeant une frontière ne reçoive pas le même chunk
+en boucle. Un chunk jamais modifié que plus personne n'observe est oublié par
+le serveur aussi, puisque la graine le redonnera à l'identique ; un chunk
+modifié reste en mémoire.
+
+Un seul type de message pour les trois cas, et non trois : lightyear range
+chaque type dans sa propre file, et l'ordre entre un `Unload` et un nouveau
+`Snapshot` du même chunk serait perdu. Pour la même raison, le client lit ces
+messages en `PreUpdate` et non en `FixedPreUpdate` : lightyear vide les
+messages non lus à chaque image, et une image sans tick les perdrait.

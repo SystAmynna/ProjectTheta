@@ -8,8 +8,10 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::input::native::InputMarker;
 use theta_core::{PlayerSimulationBundle, Speed};
 use theta_protocole::{MoveInput, PRIVATE_KEY, PROTOCOL_ID, PlayerId};
+use theta_render::CameraTarget;
 
 mod input;
+mod terrain;
 
 pub use input::KeyBindings;
 
@@ -35,7 +37,7 @@ pub struct ClientPlugin;
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(input::InputPlugin)
+        app.add_plugins((input::InputPlugin, terrain::TerrainPlugin))
             // La prédiction est pilotée par une ressource globale.
             .init_resource::<PredictionManager>()
             .add_systems(Startup, connect)
@@ -106,6 +108,7 @@ fn on_predicted(
 
     commands.entity(predicted.entity).insert((
         LocalPlayer,
+        CameraTarget,
         // Le joueur prédit est simulé localement : il lui faut le corps
         // physique que le serveur simule de son côté. Sa pose, elle, vient de
         // la réplication : surtout ne pas la réinitialiser ici.
