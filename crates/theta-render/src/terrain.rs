@@ -118,3 +118,41 @@ fn tile_data(coord: ChunkCoord, tiles: &ChunkTiles) -> Vec<Option<TileData>> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use theta_core::terrain::CHUNK_AREA;
+
+    use super::*;
+    use crate::asset_root;
+
+    #[test]
+    fn tileset_has_one_square_layer_per_index() {
+        let path = asset_root().join(crate::assets::TILESET_PATH);
+        let bytes = std::fs::read(&path).unwrap();
+        // En-tête PNG : largeur et hauteur, en big-endian, dans le bloc IHDR.
+        let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+        let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+        assert_eq!(
+            height,
+            width * TilesetIndex::COUNT,
+            "{path:?} : {width} × {height}"
+        );
+    }
+
+    #[test]
+    fn tileset_index_depends_only_on_kind_and_position() {
+        let coord = TileCoord::new(-12, 40);
+        assert_eq!(TilesetIndex::of(TileKind::Wall, coord), TilesetIndex::WALL);
+        let floor = TilesetIndex::of(TileKind::Floor, coord);
+        assert!([TilesetIndex::FLOOR, TilesetIndex::FLOOR_ALT].contains(&floor));
+        assert_eq!(TilesetIndex::of(TileKind::Floor, coord), floor);
+        assert!(floor < TilesetIndex::COUNT as u16);
+    }
+
+    #[test]
+    fn tile_data_covers_the_whole_chunk() {
+        let data = tile_data(ChunkCoord::new(0, 0), &ChunkTiles::filled(TileKind::Wall));
+        assert_eq!(data.len(), CHUNK_AREA);
+    }
+}

@@ -1,7 +1,7 @@
 use avian2d::prelude::{Position, Rotation};
 use bevy::prelude::*;
 use bevy::window::{PresentMode, WindowResolution};
-use theta_core::{Player, PlayerColor};
+use theta_core::{Player, PlayerColor, PlayerSimulationBundle};
 
 pub mod assets;
 pub mod camera;
@@ -97,7 +97,8 @@ fn attach_player_sprite(
         let color = tint.copied().unwrap_or_default().0;
 
         commands.entity(entity).insert(Sprite {
-            custom_size: Some(Vec2::splat(64.0)),
+            // Le sprite couvre exactement la hitbox.
+            custom_size: Some(Vec2::splat(PlayerSimulationBundle::RADIUS * 2.0)),
             color: Color::linear_rgb(color[0], color[1], color[2]),
             ..Sprite::from_image(assets.player.clone())
         });

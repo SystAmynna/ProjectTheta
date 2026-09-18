@@ -22,10 +22,6 @@ pub struct ServerConfig {
     pub seed: u64,
 }
 
-// todo : refaire le système de spawn
-// limiter les spawn du monde à un chunk (par défaut l'origine, si plein, le plus proche)
-// prendre une tile libre alétoire en fonction de l'ID network unique du joueur dans le chunk
-
 /// Nombre de joueurs déjà accueillis, pour répartir les points d'apparition.
 ///
 /// Ce compteur ne décroît jamais : deux joueurs successifs n'ont pas à occuper
@@ -50,13 +46,11 @@ impl Plugin for ServerPlugin {
     }
 }
 
-// todo : gérer les mondes, via une save, avoir plusieurs dimensions.
-
 /// Prépare le générateur du monde. Aucun chunk n'est créé d'avance : chacun
 /// l'est au moment où un joueur s'en approche.
 fn create_world(config: Res<ServerConfig>, mut commands: Commands) {
     commands.insert_resource(WorldGenerator::new(config.seed));
-    info!("Monde généré depuis la graine {}", config.seed);
+    info!("Générateur du monde initialisé, graine {}", config.seed);
 }
 
 /// Ouvre l'écoute UDP et démarre le serveur.
@@ -127,7 +121,6 @@ fn on_connected(
     let spawn = spawn_point(index);
     counter.0 += 1;
 
-    // todo : récuperer le pseudo plus tard
     commands.spawn((
         Name::new("Player"),
         PlayerId(peer),

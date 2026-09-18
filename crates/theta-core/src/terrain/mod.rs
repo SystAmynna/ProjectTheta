@@ -381,7 +381,8 @@ mod tests {
 
     #[test]
     fn a_wall_stops_the_player_and_lets_it_slide() {
-        const WALL_X: u32 = 10;
+        // Assez proche du départ pour que le joueur l'atteigne bien avant la fin.
+        const WALL_X: u32 = 5;
 
         let mut app = simulation();
         spawn_chunk(
@@ -439,5 +440,45 @@ mod tests {
 
         let collider = app.world().get::<Collider>(entity).unwrap();
         assert!(collider.contains_point(chunk.center(), Rotation::default(), tile.center()));
+    }
+
+    #[test]
+    fn unloaded_chunks_are_neither_read_nor_written() {
+        let mut app = simulation();
+        app.world_mut()
+            .run_system_once(|mut terrain: Terrain| {
+                let tile = TileCoord::new(7, -3);
+                assert_eq!(terrain.tile(tile), None);
+                assert_eq!(terrain.set(tile, TileKind::Wall), None);
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn clearing_every_wall_removes_the_collider() {
+        let mut app = simulation();
+        let chunk = ChunkCoord::new(0, 0);
+        let entity = spawn_chunk(&mut app.world_mut().commands(), chunk, wall_column(0)).id();
+        app.update();
+        assert!(app.world().get::<Collider>(entity).is_some());
+
+        *app.world_mut().get_mut::<ChunkTiles>(entity).unwrap() =
+            ChunkTiles::filled(TileKind::Floor);
+        app.update();
+        assert!(app.world().get::<Collider>(entity).is_none());
+    }
+
+    #[test]
+    fn replaced_chunk_stays_indexed_when_the_old_entity_goes() {
+        let mut app = simulation();
+        let coord = ChunkCoord::new(1, 1);
+
+        let old = spawn_chunk(&mut app.world_mut().commands(), coord, wall_column(0)).id();
+        let new = spawn_chunk(&mut app.world_mut().commands(), coord, wall_column(1)).id();
+        app.world_mut().flush();
+        assert_eq!(app.world().resource::<TerrainIndex>().get(coord), Some(new));
+
+        app.world_mut().despawn(old);
+        assert_eq!(app.world().resource::<TerrainIndex>().get(coord), Some(new));
     }
 }

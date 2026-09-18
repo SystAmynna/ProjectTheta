@@ -29,7 +29,11 @@ pub const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Longueur maximale de l'adresse envoyée par le client, `\n` compris.
 const MAX_ADDR_LEN: u64 = 64;
 
-/// Demande un token au serveur
+/// Demande un token au serveur.
+///
+/// Bloquant : chaque étape (connexion, envoi, lecture) peut attendre jusqu'à
+/// [`EXCHANGE_TIMEOUT`]. Échoue si le serveur est injoignable, s'il refuse la
+/// requête (protocole différent) ou si sa réponse est malformée.
 pub fn request_token(server: SocketAddr) -> io::Result<ConnectToken> {
     let mut stream = TcpStream::connect_timeout(&server, EXCHANGE_TIMEOUT)?;
     stream.set_read_timeout(Some(EXCHANGE_TIMEOUT))?;
@@ -65,7 +69,7 @@ pub fn request_token(server: SocketAddr) -> io::Result<ConnectToken> {
 
 /// Lit une requête de token : l'identifiant de protocole du client et
 /// l'adresse par laquelle il joint le serveur.
-pub fn read_request(stream: &mut TcpStream) -> io::Result<(u64, SocketAddr)> {
+pub fn read_request(stream: &mut impl Read) -> io::Result<(u64, SocketAddr)> {
     let mut protocol_id = [0u8; 8];
     stream.read_exact(&mut protocol_id)?;
 
@@ -80,13 +84,59 @@ pub fn read_request(stream: &mut TcpStream) -> io::Result<(u64, SocketAddr)> {
 }
 
 /// Répond à une requête par le token demandé.
-pub fn write_token(stream: &mut TcpStream, token: ConnectToken) -> io::Result<()> {
+pub fn write_token(stream: &mut impl Write, token: ConnectToken) -> io::Result<()> {
     let bytes = token.try_into_bytes()?;
     stream.write_all(&[STATUS_OK])?;
     stream.write_all(&bytes)
 }
 
 /// Répond à une requête par un refus.
-pub fn write_refusal(stream: &mut TcpStream, status: u8) -> io::Result<()> {
+pub fn write_refusal(stream: &mut impl Write, status: u8) -> io::Result<()> {
     stream.write_all(&[status])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::*;
+
+    fn request(protocol_id: u64, addr: &str) -> Cursor<Vec<u8>> {
+        let mut bytes = protocol_id.to_be_bytes().to_vec();
+        bytes.extend_from_slice(addr.as_bytes());
+        Cursor::new(bytes)
+    }
+
+    #[test]
+    fn reads_a_well_formed_request() {
+        let (protocol_id, addr) =
+            read_request(&mut request(PROTOCOL_ID, "10.0.0.1:5000\n")).unwrap();
+        assert_eq!(protocol_id, PROTOCOL_ID);
+        assert_eq!(addr, "10.0.0.1:5000".parse().unwrap());
+    }
+
+    #[test]
+    fn rejects_an_invalid_address() {
+        let error = read_request(&mut request(PROTOCOL_ID, "pas une adresse\n")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn rejects_an_address_longer_than_the_limit() {
+        let long = format!("{}:5000\n", "1".repeat(MAX_ADDR_LEN as usize));
+        assert!(read_request(&mut request(PROTOCOL_ID, &long)).is_err());
+    }
+
+    #[test]
+    fn rejects_a_truncated_request() {
+        let error = read_request(&mut Cursor::new(vec![0u8; 3])).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn refusal_is_a_single_status_byte() {
+        let mut out = Vec::new();
+        write_refusal(&mut out, STATUS_PROTOCOL_MISMATCH).unwrap();
+        assert_eq!(out, [STATUS_PROTOCOL_MISMATCH]);
+    }
 }

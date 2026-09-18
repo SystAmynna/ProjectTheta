@@ -37,6 +37,12 @@ cargo run -p theta-server              # serveur headless, graine tirée de l'he
 cargo run -p theta-server -- --bind 0.0.0.0:5000 --seed 42
 ```
 
+## Vérifier
+
+```sh
+./check.sh    # cargo fmt --check, clippy sans avertissement, tests du workspace
+```
+
 ## Assets
 
 Les assets sont à la racine du projet, dans `assets/` — hors de `crates/`.
@@ -58,52 +64,6 @@ Toute la logique qui les concerne vit dans `theta-render` (`assets.rs`) :
 `target/debug/theta-client` depuis n'importe quel répertoire fonctionnent donc
 toutes les deux.
 
-## Données statiques (`theta-core::data`)
-
-Tout le contenu « data-oriented » du jeu — items, armes, équipements, entités,
-ennemis — vit dans `crates/theta-core/src/data/`, en tables `const` Rust
-intégrées au binaire à la compilation. Il n'y a donc **rien à charger au
-démarrage** et aucun parsing : les champs manquants ou mal typés sont des
-erreurs de compilation.
-
-| Fichier | Table | Contenu |
-| --- | --- | --- |
-| `registry.rs` | — | `Id`, `Definition`, `Registry<T>` : le socle des tables. |
-| `common.rs` | — | `Rarity`, `DamageKind`, `Faction`, `EquipmentSlot`, `Stats`. |
-| `items.rs` | `ITEMS` | Tout ce qui entre en inventaire (`ItemKind`). |
-| `weapons.rs` | `WEAPONS` | Cadence, dégâts, portée, `FireMode`. |
-| `equipments.rs` | `EQUIPMENTS` | Emplacement, modificateurs de `Stats`, résistances. |
-| `entities.rs` | `ENTITIES` | Vie, vitesse, hitbox, sprite — le corps. |
-| `enemies.rs` | `ENEMIES` | `Behavior`, expérience, table de butin. |
-
-Les tables se référencent **par `Id`** (une `&'static str` typée), et non par
-pointeur : c'est ce qui permet de les déclarer en `const` et de sérialiser un
-identifiant tel quel dans une sauvegarde ou sur le réseau.
-
-```rust
-use theta_core::data::{ENEMIES, ENTITIES, ITEMS, Id, WEAPONS};
-
-let brute = ENEMIES.expect(Id("brute"));
-let body = ENTITIES.expect(brute.entity);   // vie, vitesse, hitbox
-for loot in brute.loot {
-    let item = ITEMS.expect(loot.item);
-}
-```
-
-- `get(id) -> Option<&'static T>` pour un identifiant venu d'une sauvegarde ou
-  du réseau ;
-- `expect(id)` pour un identifiant écrit en dur dans le code ;
-- `all()` / `iter()` pour parcourir la table.
-
-Les références croisées (une arme vers son item, un ennemi vers son entité, une
-ligne de butin vers un item) ne sont pas vérifiables par le compilateur : elles
-le sont par `data::validate()`, que `CorePlugin` appelle en `debug_assertions`
-et que les tests couvrent. **Ajouter une donnée** = ajouter l'entrée dans la
-table, créer l'éventuelle entrée cible, puis `cargo test -p theta-core`.
-
-`theta-core` ne dépend pas du rendu : `Rarity::rgb()` renvoie un `[f32; 3]`,
-c'est à `theta-render` d'en faire une `Color` Bevy.
-
 ## Réseau
 
 Le serveur fait autorité sur un monde partagé ; chaque client qui se connecte y
@@ -111,6 +71,7 @@ reçoit un joueur, prédit le sien et interpole ceux des autres.
 
 | Brique | Où | Rôle |
 | --- | --- | --- |
+| Tokens (TCP) | `theta-server` / `theta-client` | Avant de se connecter, le client obtient un `ConnectToken` auprès du serveur. Voir [Connexion](#connexion). |
 | Netcode (UDP) | `theta-server` / `theta-client` | Écoute, handshake, une entité de lien par client. |
 | Réplication | serveur → clients | `Position`, `Rotation`, vélocités, `Player`, `PlayerId`, `PlayerColor`. |
 | Prédiction | client, son joueur | Le clavier agit immédiatement ; le serveur corrige par rollback. |
@@ -119,8 +80,8 @@ reçoit un joueur, prédit le sien et interpole ceux des autres.
 | Terrain | serveur → client | `TerrainUpdate` sur `TerrainChannel` (fiable, ordonné) : chunk complet, modifications, oubli. Voir [Le monde](#le-monde). |
 
 Les valeurs sur lesquelles les deux camps doivent s'accorder vivent dans le
-code commun, jamais dans les binaires : `PROTOCOL_ID` et `PRIVATE_KEY` dans
-`theta-protocole`, et la cadence de simulation dans `theta-core`
+code commun, jamais dans les binaires : `PROTOCOL_ID` dans `theta-protocole`, et
+la cadence de simulation dans `theta-core`
 (`TICK_HZ` = 60, `tick_duration()`, que `theta-protocole` réexporte).
 
 Cette cadence n'est configurable nulle part — ni option de ligne de commande, ni
@@ -140,9 +101,21 @@ DefaultPlugins/MinimalPlugins -> ClientPlugins/ServerPlugins -> CorePlugin
     -> ProtocolPlugin -> RenderPlugin (client) -> ClientPlugin/ServerPlugin
 ```
 
-`PRIVATE_KEY` est une clé de développement, en dur et publique. Une mise en
-ligne réelle suppose une clé secrète côté serveur et des `ConnectToken` délivrés
-par un service d'authentification.
+### Connexion
+
+La clé privée de netcode n'existe que sur le serveur : il en tire une nouvelle à
+chaque lancement, et aucun client ne la connaît. Un client obtient donc son
+`ConnectToken` auprès du serveur lui-même, par un court échange TCP sur le
+**même numéro de port** que le jeu en UDP (`theta-protocole::token`) :
+
+1. le client envoie `PROTOCOL_ID` et l'adresse du serveur telle qu'il la voit ;
+2. le serveur refuse si le protocole diffère, sinon renvoie un token signé,
+   valable 30 s, portant un `client_id` unique ;
+3. le client ouvre la connexion UDP avec ce token.
+
+Chaque échange est traité sur son propre thread, borné à quelques secondes : un
+client muet ne retarde pas les autres. Le service n'authentifie personne ; une
+mise en ligne réelle supposera un service de comptes en amont.
 
 ### FPS libres, simulation à 60 Hz
 
@@ -216,8 +189,8 @@ des versions compatibles avec la prédiction.
 
 ## Le monde
 
-Le monde est **infini**, fait de tiles de 32 px (`TileKind` : sol ou mur)
-regroupées en chunks de 32 × 32 tiles (1024 px). Les trois camps s'en partagent
+Le monde est **infini**, fait de tiles de 64 px (`TILE_SIZE` ; `TileKind` : sol
+ou mur) regroupées en chunks de 32 × 32 tiles (2048 px). Les trois camps s'en partagent
 la charge :
 
 | Crate | Rôle |

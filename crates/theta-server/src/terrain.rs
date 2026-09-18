@@ -26,10 +26,11 @@ use theta_worldgen::WorldGenerator;
 /// Rayon d'abonnement, en chunks (distance de Chebyshev) : le client reçoit les
 /// 3 × 3 chunks autour du sien.
 ///
-/// Avec des chunks de 1024 px, le bord du terrain connu est toujours à plus de
-/// 1024 px du joueur — plus que la demi-largeur de la fenêtre (640 px) : aucun
-/// trou n'est jamais visible. Il faut plus de 3 s pour l'atteindre, ce qui laisse
-/// au chunk suivant tout le temps d'arriver.
+/// Le bord du terrain connu est donc toujours à plus d'un chunk du joueur
+/// (`CHUNK_WORLD_SIZE`, 2048 px), bien plus que la demi-largeur de la zone
+/// visible (960 px, `VIEW_SIZE` dans `theta-render`) : aucun trou n'est jamais
+/// visible. À vitesse normale, il faut près de 7 s pour traverser un chunk, ce
+/// qui laisse au suivant tout le temps d'arriver.
 pub const SUBSCRIBE_RADIUS: u32 = 1;
 
 /// Au-delà de ce rayon, un chunk est oublié par le client.
@@ -49,6 +50,7 @@ pub(crate) struct TerrainPlugin;
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PendingChunkEdits>()
+            .init_resource::<OutgoingTerrain>()
             .add_systems(
                 FixedUpdate,
                 // Les modifications partent avant les nouveaux abonnements : un
@@ -56,9 +58,10 @@ impl Plugin for TerrainPlugin {
                 // les inclut déjà, sans les recevoir en plus.
                 (
                     apply_tile_edits,
-                    send_chunk_edits,
+                    queue_chunk_edits,
                     update_subscriptions,
                     unload_unobserved_chunks,
+                    send_terrain,
                 )
                     .chain()
                     .after(PlayerSystems::Collide),
@@ -83,6 +86,16 @@ struct ChunkModified;
 /// Modifications du tick, par chunk, en attente d'envoi aux abonnés.
 #[derive(Resource, Debug, Default)]
 struct PendingChunkEdits(HashMap<ChunkCoord, Vec<(u16, TileKind)>>);
+
+/// Messages de terrain du tick, dans l'ordre où ils doivent partir, avec leurs
+/// destinataires.
+///
+/// La tenue des abonnements ne fait que remplir cette file ; seul
+/// [`send_terrain`] parle au réseau. L'ordre de la file est celui du canal : pour
+/// un client donné, un `Unload` puis un `Snapshot` du même chunk arrivent dans
+/// cet ordre.
+#[derive(Resource, Debug, Default)]
+struct OutgoingTerrain(Vec<(Vec<PeerId>, TerrainUpdate)>);
 
 /// Chunks du serveur, du point de vue des abonnements.
 #[derive(SystemParam)]
@@ -160,38 +173,22 @@ fn apply_tile_edits(
     }
 }
 
-/// Envoie les modifications du tick aux seuls clients abonnés à chaque chunk.
-fn send_chunk_edits(
+/// Adresse les modifications du tick aux seuls clients abonnés à chaque chunk.
+fn queue_chunk_edits(
     mut pending: ResMut<PendingChunkEdits>,
     links: Query<(&RemoteId, &ChunkSubscriptions)>,
-    servers: Query<&Server>,
-    mut sender: ServerMultiMessageSender,
+    mut outgoing: ResMut<OutgoingTerrain>,
 ) {
-    let Ok(server) = servers.single() else {
-        pending.0.clear();
-        return;
-    };
-
     for (chunk, edits) in pending.0.drain() {
         let subscribers: Vec<PeerId> = links
             .iter()
             .filter(|(_, subscriptions)| subscriptions.0.contains(&chunk))
             .map(|(remote, _)| remote.0)
             .collect();
-        if subscribers.is_empty() {
-            continue;
-        }
-
-        let update = TerrainUpdate::Edits { chunk, edits };
-        if let Err(error) = sender.send::<_, TerrainChannel>(
-            &update,
-            server,
-            &NetworkTarget::Only(subscribers.into()),
-        ) {
-            error!(
-                "Envoi des modifications du chunk {:?} impossible : {error}",
-                chunk.0
-            );
+        if !subscribers.is_empty() {
+            outgoing
+                .0
+                .push((subscribers, TerrainUpdate::Edits { chunk, edits }));
         }
     }
 }
@@ -206,26 +203,17 @@ fn update_subscriptions(
     players: Query<(&Position, &ControlledBy), With<Player>>,
     mut links: Query<(&RemoteId, &mut ChunkSubscriptions)>,
     mut loaded: SubscribedChunks,
-    servers: Query<&Server>,
-    mut sender: ServerMultiMessageSender,
+    mut outgoing: ResMut<OutgoingTerrain>,
     mut commands: Commands,
     mut generated: Local<HashMap<ChunkCoord, (ChunkTiles, u32)>>,
 ) {
-    let Ok(server) = servers.single() else {
-        return;
-    };
-
     for (position, controlled) in &players {
         let Ok((remote, mut subscriptions)) = links.get_mut(controlled.owner) else {
             continue;
         };
-        let target = NetworkTarget::Single(remote.0);
+        let peer = remote.0;
         let center = ChunkCoord::from_world(position.0);
-        let mut send = |update: TerrainUpdate| {
-            if let Err(error) = sender.send::<_, TerrainChannel>(&update, server, &target) {
-                error!("Envoi du terrain à {:?} impossible : {error}", remote.0);
-            }
-        };
+        let mut send = |update: TerrainUpdate| outgoing.0.push((vec![peer], update));
 
         let (leaving, entering) = subscription_changes(&subscriptions.0, center);
 
@@ -268,6 +256,31 @@ fn unload_unobserved_chunks(
     for (entity, subscribers) in &chunks {
         if subscribers.0 == 0 {
             commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// Envoie, dans l'ordre, les messages de terrain accumulés pendant le tick.
+///
+/// Sans serveur démarré, il n'y a personne à qui les envoyer : la file est
+/// simplement vidée.
+fn send_terrain(
+    mut outgoing: ResMut<OutgoingTerrain>,
+    servers: Query<&Server>,
+    mut sender: ServerMultiMessageSender,
+) {
+    let Ok(server) = servers.single() else {
+        outgoing.0.clear();
+        return;
+    };
+
+    for (peers, update) in outgoing.0.drain(..) {
+        let target = match peers.as_slice() {
+            &[peer] => NetworkTarget::Single(peer),
+            _ => NetworkTarget::Only(peers.into()),
+        };
+        if let Err(error) = sender.send::<_, TerrainChannel>(&update, server, &target) {
+            error!("Envoi du terrain impossible : {error}");
         }
     }
 }
@@ -321,6 +334,9 @@ fn chunks_around(center: ChunkCoord, radius: u32) -> impl Iterator<Item = ChunkC
 
 #[cfg(test)]
 mod tests {
+    use bevy::time::TimeUpdateStrategy;
+    use theta_core::{CorePlugin, TileCoord, tick_duration};
+
     use super::*;
 
     #[test]
@@ -395,4 +411,197 @@ mod tests {
         let (sent, forgotten) = settle(&mut subscribed, ChunkCoord::new(1, 0));
         assert!(sent.is_empty() && forgotten.is_empty());
     }
+
+    /// Serveur sans réseau : le cœur, et un temps qui avance d'un tick à chaque
+    /// `update`. Reprend les systèmes de [`TerrainPlugin`] sauf
+    /// [`send_terrain`], qui exige lightyear : les messages restent dans
+    /// [`OutgoingTerrain`], où [`sent`] les relève.
+    fn server() -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, CorePlugin))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(tick_duration()))
+            .insert_resource(WorldGenerator::new(42))
+            // Exigée par lightyear à l'ajout de `Disconnected`.
+            .init_resource::<PeerMetadata>()
+            .init_resource::<PendingChunkEdits>()
+            .init_resource::<OutgoingTerrain>()
+            .add_systems(
+                FixedUpdate,
+                (
+                    apply_tile_edits,
+                    queue_chunk_edits,
+                    update_subscriptions,
+                    unload_unobserved_chunks,
+                )
+                    .chain()
+                    .after(PlayerSystems::Collide),
+            )
+            .add_observer(on_link_disconnected);
+        app.finish();
+        app.cleanup();
+        app
+    }
+
+    /// Un client relié, dont le joueur se tient en `position`.
+    fn join(app: &mut App, id: u64, position: Vec2) -> (Entity, Entity) {
+        let link = app
+            .world_mut()
+            .spawn((RemoteId(PeerId::Netcode(id)), ChunkSubscriptions::default()))
+            .id();
+        let player = app
+            .world_mut()
+            .spawn((
+                Player,
+                Position(position),
+                ControlledBy {
+                    owner: link,
+                    lifetime: Lifetime::SessionBased,
+                },
+            ))
+            .id();
+        (link, player)
+    }
+
+    /// Déconnecte un client comme le fait lightyear : `Disconnected` sur le
+    /// lien, et despawn de son joueur, dont la durée de vie est liée à la
+    /// session.
+    fn leave(app: &mut App, (link, player): (Entity, Entity)) {
+        app.world_mut().entity_mut(link).insert(Disconnected {
+            reason: DisconnectedReason::Unknown,
+        });
+        app.world_mut().despawn(player);
+    }
+
+    /// Fait tourner assez de ticks pour que les abonnements se stabilisent.
+    fn settle_ticks(app: &mut App) {
+        for _ in 0..4 {
+            app.update();
+        }
+    }
+
+    /// Vide la file des messages et la renvoie.
+    fn sent(app: &mut App) -> Vec<(Vec<PeerId>, TerrainUpdate)> {
+        std::mem::take(&mut app.world_mut().resource_mut::<OutgoingTerrain>().0)
+    }
+
+    fn subscribers(app: &mut App, chunk: ChunkCoord) -> Option<u32> {
+        let entity = app.world().resource::<TerrainIndex>().get(chunk)?;
+        app.world().get::<ChunkSubscribers>(entity).map(|s| s.0)
+    }
+
+    fn edit(app: &mut App, coord: TileCoord, kind: TileKind) {
+        app.world_mut().write_message(TileEdit { coord, kind });
+    }
+
+    #[test]
+    fn a_player_receives_the_nine_chunks_around_it() {
+        let mut app = server();
+        join(&mut app, 1, Vec2::ZERO);
+        settle_ticks(&mut app);
+
+        let snapshots = sent(&mut app)
+            .into_iter()
+            .filter(|(_, update)| matches!(update, TerrainUpdate::Snapshot { .. }))
+            .count();
+        assert_eq!(snapshots, 9);
+        assert_eq!(app.world().resource::<TerrainIndex>().len(), 9);
+    }
+
+    #[test]
+    fn shared_chunks_count_each_subscriber_and_survive_a_departure() {
+        let mut app = server();
+        let first = join(&mut app, 1, Vec2::ZERO);
+        join(&mut app, 2, Vec2::ZERO);
+        settle_ticks(&mut app);
+        assert_eq!(subscribers(&mut app, ChunkCoord::new(0, 0)), Some(2));
+
+        leave(&mut app, first);
+        app.update();
+        assert_eq!(subscribers(&mut app, ChunkCoord::new(0, 0)), Some(1));
+    }
+
+    #[test]
+    fn unobserved_chunks_are_forgotten_unless_modified() {
+        let mut app = server();
+        let client = join(&mut app, 1, Vec2::ZERO);
+        settle_ticks(&mut app);
+
+        let modified = ChunkCoord::new(1, 1).tile(UVec2::ZERO);
+        edit(&mut app, modified, TileKind::Wall);
+        edit(&mut app, modified, TileKind::Floor);
+        edit(&mut app, modified, TileKind::Wall);
+        app.update();
+
+        leave(&mut app, client);
+        app.update();
+
+        let index = app.world().resource::<TerrainIndex>();
+        assert!(
+            index.contains(modified.chunk()),
+            "le chunk modifié est gardé"
+        );
+        assert_eq!(index.len(), 1, "les autres sont oubliés");
+    }
+
+    #[test]
+    fn edits_reach_subscribers_only_when_something_changed() {
+        let mut app = server();
+        join(&mut app, 1, Vec2::ZERO);
+        join(&mut app, 2, Vec2::splat(CHUNK_FAR));
+        settle_ticks(&mut app);
+        sent(&mut app);
+
+        // La tile vaut déjà ce sol, garanti autour du point d'apparition.
+        let tile = TileCoord::new(0, 0);
+        edit(&mut app, tile, TileKind::Floor);
+        app.update();
+        assert!(
+            sent(&mut app).is_empty(),
+            "une édition sans effet ne part pas"
+        );
+
+        edit(&mut app, tile, TileKind::Wall);
+        app.update();
+        assert_eq!(
+            sent(&mut app),
+            vec![(
+                vec![PeerId::Netcode(1)],
+                TerrainUpdate::Edits {
+                    chunk: tile.chunk(),
+                    edits: vec![(tile.local_index() as u16, TileKind::Wall)],
+                }
+            )]
+        );
+    }
+
+    #[test]
+    fn editing_an_unloaded_chunk_keeps_it_in_memory() {
+        let mut app = server();
+        let tile = TileCoord::new(10_000, 10_000);
+        let kind = match WorldGenerator::new(42).tile(tile) {
+            TileKind::Wall => TileKind::Floor,
+            TileKind::Floor => TileKind::Wall,
+        };
+
+        edit(&mut app, tile, kind);
+        app.update();
+        app.update();
+
+        let entity = app
+            .world()
+            .resource::<TerrainIndex>()
+            .get(tile.chunk())
+            .expect("le chunk modifié est créé");
+        assert!(app.world().get::<ChunkModified>(entity).is_some());
+        assert_eq!(
+            app.world()
+                .get::<ChunkTiles>(entity)
+                .unwrap()
+                .get(tile.local_index()),
+            kind
+        );
+    }
+
+    /// Assez loin de l'origine pour ne partager aucun chunk avec elle.
+    const CHUNK_FAR: f32 = 10.0 * theta_core::terrain::CHUNK_WORLD_SIZE;
 }

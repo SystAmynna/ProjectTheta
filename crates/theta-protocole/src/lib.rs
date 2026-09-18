@@ -6,10 +6,11 @@ use lightyear_avian2d::plugin::{AvianReplicationMode, LightyearAvianPlugin};
 use serde::{Deserialize, Serialize};
 use theta_core::{ChunkCoord, MoveIntent, Player, PlayerColor, PlayerSystems, TileKind};
 
-// Récupère la cadence des ticks depuis theta-core
+// La cadence de simulation fait partie du contrat entre client et serveur.
 pub use theta_core::{TICK_HZ, tick_duration};
 
-/// Identifiant unique du protocole, doit être changé à chaque modification du protocole
+/// Identifiant du protocole : à changer à chaque modification incompatible,
+/// pour qu'un client et un serveur de versions différentes se refusent.
 pub const PROTOCOL_ID: u64 = 0x7E7A_0004;
 
 pub mod token;
@@ -18,22 +19,10 @@ pub mod token;
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlayerId(pub PeerId);
 
-impl PlayerId {
-    /// Valeur numérique stable de l'identifiant, utilisable comme graine.
-    pub fn seed(&self) -> u64 {
-        match self.0 {
-            PeerId::Netcode(id) | PeerId::Steam(id) | PeerId::Local(id) => id,
-            PeerId::Entity(bits) => bits,
-            PeerId::Server => 0,
-            // Les autres variantes n'apparaissent pas avec le transport UDP,
-            // mais l'exhaustivité évite une rupture au prochain ajout.
-            _ => 0,
-        }
-    }
-}
-
 /// Couleur attribuée au n-ième joueur de la partie.
-/// todo : changer le moyen de distinction
+///
+/// Les teintes avancent du nombre d'or : deux joueurs successifs reçoivent des
+/// couleurs éloignées, quel que soit leur nombre.
 pub fn player_color(index: u32) -> PlayerColor {
     const GOLDEN_RATIO_CONJUGATE: f32 = 0.618_034;
 
@@ -167,5 +156,41 @@ impl Plugin for ProtocolPlugin {
 fn feed_move_intent(mut players: Query<(&ActionState<MoveInput>, &mut MoveIntent)>) {
     for (action, mut intent) in &mut players {
         intent.0 = action.0.0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(a: [f32; 3], b: [f32; 3]) -> bool {
+        a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5)
+    }
+
+    #[test]
+    fn hsv_covers_the_six_sectors() {
+        let cases = [
+            (0.0, [1.0, 0.0, 0.0]),
+            (1.0 / 6.0, [1.0, 1.0, 0.0]),
+            (2.0 / 6.0, [0.0, 1.0, 0.0]),
+            (3.0 / 6.0, [0.0, 1.0, 1.0]),
+            (4.0 / 6.0, [0.0, 0.0, 1.0]),
+            (5.0 / 6.0, [1.0, 0.0, 1.0]),
+        ];
+        for (hue, rgb) in cases {
+            let got = hsv_to_rgb(hue, 1.0, 1.0);
+            assert!(close(got, rgb), "teinte {hue} : {got:?} au lieu de {rgb:?}");
+        }
+    }
+
+    #[test]
+    fn first_players_get_distinct_colors() {
+        let colors: Vec<_> = (0..8).map(|index| player_color(index).0).collect();
+        for (i, a) in colors.iter().enumerate() {
+            assert!(a.iter().all(|c| (0.0..=1.0).contains(c)), "{a:?}");
+            for b in &colors[i + 1..] {
+                assert!(!close(*a, *b), "couleurs confondues : {a:?}");
+            }
+        }
     }
 }

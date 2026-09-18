@@ -23,7 +23,8 @@ const OCTAVES: u32 = 3;
 /// Au-dessus de ce seuil, le bruit donne un mur.
 ///
 /// Réglé pour environ un quart de murs : des îlots et des parois séparés par
-/// de larges passages, où la hitbox du joueur (deux tiles) circule sans peine.
+/// de larges passages, où la hitbox du joueur (une tile de diamètre) circule
+/// sans peine.
 const WALL_THRESHOLD: f32 = 0.6;
 
 /// Rayon du disque de sol garanti autour de l'origine, en pixels : le cercle des

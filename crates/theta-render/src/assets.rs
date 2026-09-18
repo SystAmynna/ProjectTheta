@@ -55,12 +55,12 @@ pub fn asset_plugin() -> AssetPlugin {
     }
 }
 
-/// Fichier du tileset : une bande verticale de tiles de 32 × 32, dans l'ordre de
-/// [`TilesetIndex`](crate::terrain::TilesetIndex).
-const TILESET_PATH: &str = "tiles.png";
+/// Fichier du tileset : une bande verticale de tiles carrées, dans l'ordre de
+/// [`TilesetIndex`](crate::terrain::TilesetIndex). Les tiles y font 32 px et
+/// sont affichées à `TILE_SIZE`, sans lissage (voir `image_plugin`).
+pub(crate) const TILESET_PATH: &str = "tiles.png";
 
-/// Fichier du sprite du joueur
-/// todo : changer ce fichier
+/// Fichier du sprite du joueur, provisoire.
 const PLAYER_PATH: &str = "a.png";
 
 /// Handles des assets chargés une fois pour toutes au démarrage.
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn asset_root_contains_player_sprite() {
-        assert!(asset_root().join("a.png").is_file());
+        assert!(asset_root().join(PLAYER_PATH).is_file());
     }
 
     #[test]

@@ -13,7 +13,7 @@ pub const CHUNK_AREA: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
 /// Côté d'un chunk, en pixels.
 pub const CHUNK_WORLD_SIZE: f32 = TILE_SIZE * CHUNK_SIZE as f32;
 
-/// Nature simulative d'une tile
+/// Nature d'une tile pour la simulation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum TileKind {
@@ -116,11 +116,11 @@ mod tests {
     #[test]
     fn world_to_tile_handles_negative_coordinates() {
         assert_eq!(
-            TileCoord::from_world(Vec2::new(0.0, 31.9)),
+            TileCoord::from_world(Vec2::new(0.0, TILE_SIZE - 0.1)),
             TileCoord::new(0, 0)
         );
         assert_eq!(
-            TileCoord::from_world(Vec2::new(-0.1, 32.0)),
+            TileCoord::from_world(Vec2::new(-0.1, TILE_SIZE)),
             TileCoord::new(-1, 1)
         );
     }

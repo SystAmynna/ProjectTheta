@@ -12,7 +12,8 @@ use bevy::camera::{CameraOutputMode, ScalingMode, Viewport};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-/// Zone de monde visible, en unités monde (1 tile = 32 unités).
+/// Zone de monde visible, en unités monde (pixels ; une tile en fait
+/// `TILE_SIZE`).
 pub const VIEW_SIZE: Vec2 = Vec2::new(1920.0, 1080.0);
 
 /// Entité que la caméra suit : le joueur local, marqué par `theta-client`.

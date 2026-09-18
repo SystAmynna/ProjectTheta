@@ -37,10 +37,11 @@ pub struct ClientPlugin;
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((input::InputPlugin, terrain::TerrainPlugin)) // Ajout des plugins client
+        app.add_plugins((input::InputPlugin, terrain::TerrainPlugin))
             // La prédiction est pilotée par une ressource globale.
             .init_resource::<PredictionManager>()
-            .add_systems(Startup, connect) // todo : retirer la connexion du Startup quand on aura un menu principal
+            // Faute de menu principal, la connexion part dès le démarrage.
+            .add_systems(Startup, connect)
             .add_observer(on_predicted)
             .add_observer(on_interpolated)
             .add_observer(on_connected)
@@ -48,10 +49,11 @@ impl Plugin for ClientPlugin {
     }
 }
 
-/// Connecte le client au serveur
+/// Connecte le client au serveur.
 fn connect(config: Res<ClientConfig>, mut commands: Commands) {
-    // Le client cherche à s'identifier au prêt du serveur avec un token
-    // Bloquant (peu durer plusieurs secondes)
+    // Le token s'obtient auprès du serveur avant d'ouvrir la connexion UDP.
+    // L'appel est bloquant : la fenêtre reste figée tant qu'il n'a pas abouti,
+    // au plus quelques secondes (voir `request_token`).
     let token = match request_token(config.server) {
         Ok(token) => token,
         Err(error) => {

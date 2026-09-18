@@ -1,5 +1,7 @@
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 use bevy::prelude::*;
@@ -13,6 +15,9 @@ use theta_protocole::token::{
 const CLIENT_TIMEOUT_SECS: i32 = 3;
 /// Durée de validité d'un token émis, en secondes : le client s'en sert aussitôt.
 const TOKEN_EXPIRE_SECS: i32 = 30;
+/// Nombre maximal d'échanges traités en même temps. Au-delà, les nouvelles
+/// connexions sont fermées aussitôt : le client réessaiera.
+const MAX_CONCURRENT_EXCHANGES: usize = 32;
 
 /// Lance, sur son propre thread, le service qui distribue les tokens de
 /// connexion. La clé privée n'existe que là et dans le `NetcodeServer`.
@@ -27,20 +32,44 @@ pub fn spawn_token_service(bind: SocketAddr, key: Key) -> io::Result<()> {
     Ok(())
 }
 
+/// Accepte les connexions et traite chacune sur son propre thread : un client
+/// lent ou muet ne retient que le sien, jusqu'à [`EXCHANGE_TIMEOUT`], sans
+/// bloquer les suivants.
 fn serve(listener: TcpListener, bind: SocketAddr, key: Key) {
     // Chaque token porte un `client_id` distinct : netcode refuse une seconde
     // connexion sous un identifiant déjà connecté.
     let mut next_client_id: u64 = 1;
+    let in_flight = Arc::new(AtomicUsize::new(0));
 
     for stream in listener.incoming() {
-        let result = stream.and_then(|mut stream| {
-            let client_id = next_client_id;
-            next_client_id += 1;
-            answer(&mut stream, bind, key, client_id)
-        });
+        let mut stream = match stream {
+            Ok(stream) => stream,
+            Err(error) => {
+                warn!("Connexion au service de tokens échouée : {error}");
+                continue;
+            }
+        };
 
-        if let Err(error) = result {
-            warn!("Requête de token rejetée : {error}");
+        if in_flight.fetch_add(1, Ordering::AcqRel) >= MAX_CONCURRENT_EXCHANGES {
+            in_flight.fetch_sub(1, Ordering::AcqRel);
+            warn!("Service de tokens saturé : connexion fermée");
+            continue;
+        }
+
+        let client_id = next_client_id;
+        next_client_id += 1;
+        let exchange = Arc::clone(&in_flight);
+        let spawned = thread::Builder::new()
+            .name("theta-token".into())
+            .spawn(move || {
+                if let Err(error) = answer(&mut stream, bind, key, client_id) {
+                    warn!("Requête de token rejetée : {error}");
+                }
+                exchange.fetch_sub(1, Ordering::AcqRel);
+            });
+        if let Err(error) = spawned {
+            warn!("Impossible de traiter une requête de token : {error}");
+            in_flight.fetch_sub(1, Ordering::AcqRel);
         }
     }
 }
@@ -110,5 +139,20 @@ mod tests {
         let mut response = Vec::new();
         stream.read_to_end(&mut response).unwrap();
         assert_eq!(response, [STATUS_PROTOCOL_MISMATCH]);
+    }
+
+    #[test]
+    fn a_silent_client_does_not_block_the_others() {
+        let addr = start();
+        // Connecté mais muet : il occupe son échange jusqu'au délai maximal.
+        let _silent = TcpStream::connect(addr).unwrap();
+
+        let started = std::time::Instant::now();
+        assert!(request_token(addr).is_ok());
+        assert!(
+            started.elapsed() < EXCHANGE_TIMEOUT,
+            "le token a attendu le client muet : {:?}",
+            started.elapsed()
+        );
     }
 }

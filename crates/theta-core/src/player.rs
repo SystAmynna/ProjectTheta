@@ -44,7 +44,7 @@ pub struct Player;
 
 /// Couleur d'un joueur, en RGB linéaire.
 ///
-/// todo : remplacer par un autre système de distinction (pseudos)
+/// Seul moyen, pour l'instant, de distinguer les joueurs à l'écran.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlayerColor(pub [f32; 3]);
 
@@ -107,8 +107,8 @@ pub struct PlayerSimulationBundle {
 }
 
 impl PlayerSimulationBundle {
-    // todo : modifier la boite de collision du joueur
-    /// Rayon de la hitbox du joueur, en pixels (le sprite fait 64 × 64).
+    /// Rayon de la hitbox du joueur, en pixels : son diamètre est celui d'une
+    /// tile, et le sprite est affiché à cette même taille.
     pub const RADIUS: f32 = 32.0;
 
     pub fn new(speed: f32) -> Self {
