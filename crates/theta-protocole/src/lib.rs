@@ -10,14 +10,9 @@ use theta_core::{ChunkCoord, MoveIntent, Player, PlayerColor, PlayerSystems, Til
 pub use theta_core::{TICK_HZ, tick_duration};
 
 /// Identifiant unique du protocole, doit être changé à chaque modification du protocole
-pub const PROTOCOL_ID: u64 = 0x7E7A_0003;
+pub const PROTOCOL_ID: u64 = 0x7E7A_0004;
 
-/// Clé privée du handshake netcode.
-///
-/// Valeur de développement : en production, elle doit rester secrète côté
-/// serveur et les clients doivent recevoir un `ConnectToken` d'un service
-/// d'authentification.
-pub const PRIVATE_KEY: [u8; 32] = [0; 32];
+pub mod token;
 
 /// Identité réseau d'un joueur, répliquée à tous.
 ///

@@ -1,13 +1,15 @@
 use std::net::SocketAddr;
 
 use bevy::prelude::*;
+use lightyear::netcode::generate_key;
 use lightyear::prelude::*;
 use lightyear::prelude::server::*;
 use theta_core::{PlayerBundle, Speed, TICK_HZ, spawn_point};
-use theta_protocole::{PRIVATE_KEY, PROTOCOL_ID, PlayerId, player_color};
+use theta_protocole::{PROTOCOL_ID, PlayerId, player_color};
 use theta_worldgen::WorldGenerator;
 
 mod terrain;
+mod token;
 
 pub use terrain::{SUBSCRIBE_RADIUS, UNSUBSCRIBE_RADIUS};
 
@@ -53,10 +55,22 @@ fn create_world(config: Res<ServerConfig>, mut commands: Commands) {
 
 /// Ouvre l'écoute UDP et démarre le serveur.
 fn start_listening(config: Res<ServerConfig>, mut commands: Commands) {
+    // Clé propre à cette instance : aucun client ne la connaît, ils demandent
+    // leur token au service ci-dessous.
+    let key = generate_key();
+
+    if let Err(error) = token::spawn_token_service(config.bind, key) {
+        error!(
+            "Impossible d'ouvrir le service de tokens sur {} : {error}",
+            config.bind
+        );
+        return;
+    }
+
     let netcode = NetcodeServer::new(
         NetcodeConfig::default()
             .with_protocol_id(PROTOCOL_ID)
-            .with_key(PRIVATE_KEY),
+            .with_key(key),
     );
 
     // `ServerUdpIo` exige `Server`, qu'il ajoute lui-même, et `LocalAddr`, qui

@@ -1,5 +1,4 @@
 use std::net::{Ipv4Addr, SocketAddr};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::prelude::*;
 use lightyear::frame_interpolation::FrameInterpolate;
@@ -7,7 +6,8 @@ use lightyear::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::input::native::InputMarker;
 use theta_core::{PlayerSimulationBundle, Speed};
-use theta_protocole::{MoveInput, PRIVATE_KEY, PROTOCOL_ID, PlayerId};
+use theta_protocole::token::request_token;
+use theta_protocole::{MoveInput, PlayerId};
 use theta_render::CameraTarget;
 
 mod input;
@@ -48,28 +48,22 @@ impl Plugin for ClientPlugin {
     }
 }
 
-/// Identifiant de client unique pour cette instance.
-///
-/// Deux clients lancés sur la même machine doivent en avoir des différents,
-/// sinon le second remplace le premier côté serveur. En développement, l'heure
-/// courante en nanosecondes suffit.
-fn client_id() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or_default()
-}
-
 /// Connecte le client au serveur
 fn connect(config: Res<ClientConfig>, mut commands: Commands) {
-    let auth = Authentication::Manual {
-        server_addr: config.server,
-        client_id: client_id(),
-        private_key: PRIVATE_KEY,
-        protocol_id: PROTOCOL_ID,
+    // Le client cherche à s'identifier au prêt du serveur avec un token
+    // Bloquant (peu durer plusieurs secondes)
+    let token = match request_token(config.server) {
+        Ok(token) => token,
+        Err(error) => {
+            error!(
+                "Impossible d'obtenir un token de {} : {error}",
+                config.server
+            );
+            return;
+        }
     };
 
-    let netcode = match NetcodeClient::new(auth, NetcodeConfig::default()) {
+    let netcode = match NetcodeClient::new(Authentication::Token(token), NetcodeConfig::default()) {
         Ok(netcode) => netcode,
         Err(error) => {
             error!("Impossible de préparer la connexion : {error:?}");
