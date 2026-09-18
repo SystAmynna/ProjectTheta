@@ -14,11 +14,7 @@ pub const PROTOCOL_ID: u64 = 0x7E7A_0004;
 
 pub mod token;
 
-/// Identité réseau d'un joueur, répliquée à tous.
-///
-/// Elle permet à chaque client de distinguer les joueurs entre eux (et donc de
-/// leur donner une couleur stable) sans dépendre des identifiants d'entités,
-/// qui diffèrent d'une machine à l'autre.
+/// Identité réseau unique d'un joueur, répliquée à tous.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlayerId(pub PeerId);
 
@@ -37,10 +33,7 @@ impl PlayerId {
 }
 
 /// Couleur attribuée au n-ième joueur de la partie.
-///
-/// Les teintes sont réparties par le nombre d'or : deux joueurs consécutifs
-/// obtiennent des couleurs bien distinctes, et la suite ne se répète jamais
-/// exactement.
+/// todo : changer le moyen de distinction
 pub fn player_color(index: u32) -> PlayerColor {
     const GOLDEN_RATIO_CONJUGATE: f32 = 0.618_034;
 
@@ -118,10 +111,6 @@ pub enum TerrainUpdate {
 
 /// Protocole réseau partagé : composants répliqués, inputs et messages
 /// communs au client et au serveur (lightyear).
-///
-/// **À ajouter après `ClientPlugins` / `ServerPlugins`** : [`LightyearAvianPlugin`]
-/// n'installe ses enregistrements que si le registre de composants de lightyear
-/// existe déjà.
 pub struct ProtocolPlugin;
 
 impl Plugin for ProtocolPlugin {

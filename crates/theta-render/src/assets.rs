@@ -59,6 +59,10 @@ pub fn asset_plugin() -> AssetPlugin {
 /// [`TilesetIndex`](crate::terrain::TilesetIndex).
 const TILESET_PATH: &str = "tiles.png";
 
+/// Fichier du sprite du joueur
+/// todo : changer ce fichier
+const PLAYER_PATH: &str = "a.png";
+
 /// Handles des assets chargés une fois pour toutes au démarrage.
 #[derive(Resource, Debug, Clone)]
 pub struct GameAssets {
@@ -81,7 +85,7 @@ fn load_assets(mut commands: Commands, assets: Res<AssetServer>) {
     debug!("Répertoire des assets : {}", asset_root().display());
 
     commands.insert_resource(GameAssets {
-        player: assets.load("a.png"),
+        player: assets.load(PLAYER_PATH),
         tileset: assets
             .load_builder()
             .with_settings(|settings: &mut ImageLoaderSettings| {
