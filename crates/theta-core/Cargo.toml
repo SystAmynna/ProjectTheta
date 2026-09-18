@@ -8,3 +8,6 @@ license.workspace = true
 bevy = { workspace = true }
 avian2d = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+postcard = { workspace = true }

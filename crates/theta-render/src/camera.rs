@@ -16,6 +16,10 @@ use bevy::window::PrimaryWindow;
 /// `TILE_SIZE`).
 pub const VIEW_SIZE: Vec2 = Vec2::new(1920.0, 1080.0);
 
+/// Couleur du vide : ce qu'on voit au fond des trous du sol, là où aucune
+/// tile n'est dessinée. Distincte du noir des bandes autour du viewport.
+pub const VOID_COLOR: Color = Color::srgb(0.03, 0.03, 0.05);
+
 /// Entité que la caméra suit : le joueur local, marqué par `theta-client`.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct CameraTarget;
@@ -52,6 +56,9 @@ fn spawn_camera(mut commands: Commands) {
         GameCamera,
         Camera2d,
         Camera {
+            // L'image de la caméra part du vide : les trous du sol le laissent
+            // voir.
+            clear_color: ClearColorConfig::Custom(VOID_COLOR),
             // La fenêtre est entièrement effacée avant que l'image de la caméra
             // n'y soit copiée, limitée au viewport : ce qui reste autour forme
             // les bandes noires.

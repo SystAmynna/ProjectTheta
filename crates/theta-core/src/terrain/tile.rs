@@ -13,19 +13,55 @@ pub const CHUNK_AREA: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
 /// Côté d'un chunk, en pixels.
 pub const CHUNK_WORLD_SIZE: f32 = TILE_SIZE * CHUNK_SIZE as f32;
 
+/// Couche d'un chunk. Chaque position porte une tile par couche.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TileLayer {
+    /// Le sol, sur lequel on marche. Là où il manque ([`TileKind::Empty`]), le
+    /// terrain est troué : personne ne peut y aller, et on y voit le vide.
+    Ground,
+    /// Ce qui est posé sur le sol : les murs, et les objets placés par les
+    /// joueurs (tables, stations d'artisanat…). Vide le plus souvent.
+    Object,
+}
+
+impl TileLayer {
+    /// Toutes les couches, du bas vers le haut : l'ordre de dessin, et celui
+    /// de la sérialisation.
+    pub const ALL: [Self; 2] = [Self::Ground, Self::Object];
+
+    /// Une tile de cette couche empêche-t-elle de passer ?
+    ///
+    /// Au sol, c'est l'absence de sol qui bloque : un trou. Sur la couche
+    /// d'objets, c'est la tile elle-même, si elle est solide.
+    pub const fn blocks(self, kind: TileKind) -> bool {
+        match self {
+            Self::Ground => matches!(kind, TileKind::Empty) || kind.is_solid(),
+            Self::Object => kind.is_solid(),
+        }
+    }
+}
+
 /// Nature d'une tile pour la simulation.
+///
+/// Sérialisée par l'index de sa variante : **l'ordre des variantes fait partie
+/// du format** du réseau et des sauvegardes. Une nouvelle variante s'ajoute à la
+/// fin ; en retirer ou en réordonner une invalide les sauvegardes existantes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum TileKind {
-    /// Sol praticable.
+    /// Aucune tile. Au sol, c'est un trou ; sur la couche d'objets, c'est
+    /// l'état ordinaire : rien n'est posé là.
     #[default]
+    Empty,
+    /// Sol praticable.
     Floor,
     /// Mur infranchissable.
     Wall,
 }
 
 impl TileKind {
-    /// La tile bloque-t-elle le passage ?
+    /// La tile bloque-t-elle le passage par elle-même ? Un trou, lui, bloque
+    /// par l'absence de sol : voir [`TileLayer::blocks`].
     pub const fn is_solid(self) -> bool {
         matches!(self, Self::Wall)
     }

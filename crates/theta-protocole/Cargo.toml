@@ -11,3 +11,6 @@ bevy = { workspace = true }
 lightyear = { workspace = true }
 lightyear_avian2d = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+postcard = { workspace = true }

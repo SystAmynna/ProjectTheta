@@ -17,10 +17,9 @@ use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use theta_core::{
-    ChunkCoord, ChunkTiles, Player, PlayerSystems, Terrain, TerrainIndex, TileEdit, TileKind,
-    spawn_chunk,
+    ChunkCoord, ChunkTiles, Player, PlayerSystems, Terrain, TerrainIndex, TileEdit, spawn_chunk,
 };
-use theta_protocole::{TerrainChannel, TerrainUpdate};
+use theta_protocole::{TerrainChannel, TerrainUpdate, TileChange};
 use theta_worldgen::WorldGenerator;
 
 /// Rayon d'abonnement, en chunks (distance de Chebyshev) : le client reçoit les
@@ -85,7 +84,7 @@ struct ChunkModified;
 
 /// Modifications du tick, par chunk, en attente d'envoi aux abonnés.
 #[derive(Resource, Debug, Default)]
-struct PendingChunkEdits(HashMap<ChunkCoord, Vec<(u16, TileKind)>>);
+struct PendingChunkEdits(HashMap<ChunkCoord, Vec<TileChange>>);
 
 /// Messages de terrain du tick, dans l'ordre où ils doivent partir, avec leurs
 /// destinataires.
@@ -108,11 +107,11 @@ struct SubscribedChunks<'w, 's> {
 impl SubscribedChunks<'_, '_> {
     /// Ajoute un abonné à un chunk en mémoire et renvoie son contenu, ou `None`
     /// s'il faut d'abord le générer.
-    fn subscribe(&mut self, chunk: ChunkCoord) -> Option<Vec<TileKind>> {
+    fn subscribe(&mut self, chunk: ChunkCoord) -> Option<ChunkTiles> {
         let entity = self.index.get(chunk)?;
         let (tiles, mut subscribers) = self.chunks.get_mut(entity).ok()?;
         subscribers.0 += 1;
-        Some(tiles.as_slice().to_vec())
+        Some(tiles.clone())
     }
 
     /// Contenu d'un chunk qui n'est pas en mémoire.
@@ -145,23 +144,23 @@ fn apply_tile_edits(
         let chunk = edit.coord.chunk();
         let index = edit.coord.local_index();
 
-        match terrain.set(edit.coord, edit.kind) {
+        match terrain.set(edit.layer, edit.coord, edit.kind) {
             Some(true) => {
                 if let Some(entity) = terrain.chunk_entity(chunk) {
                     commands.entity(entity).insert(ChunkModified);
                 }
-                pending
-                    .0
-                    .entry(chunk)
-                    .or_default()
-                    .push((index as u16, edit.kind));
+                pending.0.entry(chunk).or_default().push(TileChange {
+                    layer: edit.layer,
+                    index: index as u16,
+                    kind: edit.kind,
+                });
             }
             Some(false) => {}
             None => {
                 let (tiles, changed) = unloaded
                     .entry(chunk)
                     .or_insert_with(|| (generator.generate_chunk(chunk), false));
-                *changed |= tiles.set(index, edit.kind);
+                *changed |= tiles.set(edit.layer, index, edit.kind);
             }
         }
     }
@@ -231,7 +230,7 @@ fn update_subscriptions(
                     .entry(chunk)
                     .or_insert_with(|| (loaded.generate(chunk), 0));
                 *subscribers += 1;
-                tiles.as_slice().to_vec()
+                tiles.clone()
             });
 
             send(TerrainUpdate::Snapshot { chunk, tiles });
@@ -335,7 +334,7 @@ fn chunks_around(center: ChunkCoord, radius: u32) -> impl Iterator<Item = ChunkC
 #[cfg(test)]
 mod tests {
     use bevy::time::TimeUpdateStrategy;
-    use theta_core::{CorePlugin, TileCoord, tick_duration};
+    use theta_core::{CorePlugin, TileCoord, TileKind, TileLayer, tick_duration};
 
     use super::*;
 
@@ -489,8 +488,9 @@ mod tests {
         app.world().get::<ChunkSubscribers>(entity).map(|s| s.0)
     }
 
-    fn edit(app: &mut App, coord: TileCoord, kind: TileKind) {
-        app.world_mut().write_message(TileEdit { coord, kind });
+    fn edit(app: &mut App, layer: TileLayer, coord: TileCoord, kind: TileKind) {
+        app.world_mut()
+            .write_message(TileEdit { coord, layer, kind });
     }
 
     #[test]
@@ -527,9 +527,9 @@ mod tests {
         settle_ticks(&mut app);
 
         let modified = ChunkCoord::new(1, 1).tile(UVec2::ZERO);
-        edit(&mut app, modified, TileKind::Wall);
-        edit(&mut app, modified, TileKind::Floor);
-        edit(&mut app, modified, TileKind::Wall);
+        edit(&mut app, TileLayer::Object, modified, TileKind::Wall);
+        edit(&mut app, TileLayer::Object, modified, TileKind::Empty);
+        edit(&mut app, TileLayer::Object, modified, TileKind::Wall);
         app.update();
 
         leave(&mut app, client);
@@ -553,14 +553,14 @@ mod tests {
 
         // La tile vaut déjà ce sol, garanti autour du point d'apparition.
         let tile = TileCoord::new(0, 0);
-        edit(&mut app, tile, TileKind::Floor);
+        edit(&mut app, TileLayer::Ground, tile, TileKind::Floor);
         app.update();
         assert!(
             sent(&mut app).is_empty(),
             "une édition sans effet ne part pas"
         );
 
-        edit(&mut app, tile, TileKind::Wall);
+        edit(&mut app, TileLayer::Object, tile, TileKind::Wall);
         app.update();
         assert_eq!(
             sent(&mut app),
@@ -568,7 +568,11 @@ mod tests {
                 vec![PeerId::Netcode(1)],
                 TerrainUpdate::Edits {
                     chunk: tile.chunk(),
-                    edits: vec![(tile.local_index() as u16, TileKind::Wall)],
+                    edits: vec![TileChange {
+                        layer: TileLayer::Object,
+                        index: tile.local_index() as u16,
+                        kind: TileKind::Wall,
+                    }],
                 }
             )]
         );
@@ -578,12 +582,12 @@ mod tests {
     fn editing_an_unloaded_chunk_keeps_it_in_memory() {
         let mut app = server();
         let tile = TileCoord::new(10_000, 10_000);
-        let kind = match WorldGenerator::new(42).tile(tile) {
-            TileKind::Wall => TileKind::Floor,
-            TileKind::Floor => TileKind::Wall,
+        let kind = match WorldGenerator::new(42).tile(TileLayer::Object, tile) {
+            TileKind::Wall => TileKind::Empty,
+            _ => TileKind::Wall,
         };
 
-        edit(&mut app, tile, kind);
+        edit(&mut app, TileLayer::Object, tile, kind);
         app.update();
         app.update();
 
@@ -597,7 +601,7 @@ mod tests {
             app.world()
                 .get::<ChunkTiles>(entity)
                 .unwrap()
-                .get(tile.local_index()),
+                .get(TileLayer::Object, tile.local_index()),
             kind
         );
     }

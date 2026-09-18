@@ -18,8 +18,8 @@ pub use player::{
     MoveIntent, Player, PlayerBundle, PlayerColor, PlayerSimulationBundle, PlayerSystems, Speed,
 };
 pub use terrain::{
-    ChunkCoord, ChunkTiles, Terrain, TerrainChunk, TerrainIndex, TerrainSystems, TileCoord,
-    TileEdit, TileKind, spawn_chunk,
+    ChunkCoord, ChunkLayer, ChunkTiles, Terrain, TerrainChunk, TerrainIndex, TerrainSystems,
+    TileCoord, TileEdit, TileKind, TileLayer, spawn_chunk,
 };
 pub use world::{SPAWN_RADIUS, spawn_point};
 

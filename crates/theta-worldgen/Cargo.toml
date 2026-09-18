@@ -7,3 +7,6 @@ license.workspace = true
 [dependencies]
 theta-core = { workspace = true }
 bevy = { workspace = true }
+
+[dev-dependencies]
+postcard = { workspace = true }

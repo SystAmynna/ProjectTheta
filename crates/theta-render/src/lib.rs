@@ -8,7 +8,7 @@ pub mod camera;
 pub mod terrain;
 
 pub use assets::{ASSET_ROOT_ENV, GameAssets, asset_plugin, asset_root};
-pub use camera::{CameraTarget, GameCamera, VIEW_SIZE};
+pub use camera::{CameraTarget, GameCamera, VIEW_SIZE, VOID_COLOR};
 
 /// [`ImagePlugin`] du client : filtrage au plus proche, pour que les tiles en
 /// pixel art restent nettes au lieu d'être lissées.

@@ -17,11 +17,13 @@ use bevy::prelude::*;
 use crate::layers::GameLayer;
 use crate::player::PlayerSystems;
 
+mod chunk;
 mod tile;
 
+pub use chunk::{ChunkLayer, ChunkTiles};
 pub use tile::{
     CHUNK_AREA, CHUNK_SIZE, CHUNK_WORLD_SIZE, ChunkCoord, TILE_SIZE, TileCoord, TileKind,
-    index_to_local, local_to_index,
+    TileLayer, index_to_local, local_to_index,
 };
 
 /// Index des chunks chargés, et reconstruction de leur collider.
@@ -57,59 +59,8 @@ pub enum TerrainSystems {
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TileEdit {
     pub coord: TileCoord,
+    pub layer: TileLayer,
     pub kind: TileKind,
-}
-
-/// Les tiles d'un chunk, en row-major, y vers le haut.
-///
-/// C'est la seule copie des données : le collider (ici) et le rendu
-/// (`theta-render`) en sont dérivés, chacun sur `Changed<ChunkTiles>`.
-#[derive(Component, Clone, Debug, PartialEq, Eq)]
-pub struct ChunkTiles(Box<[TileKind; CHUNK_AREA]>);
-
-impl ChunkTiles {
-    /// Chunk uniformément rempli.
-    pub fn filled(kind: TileKind) -> Self {
-        Self(Box::new([kind; CHUNK_AREA]))
-    }
-
-    /// Chunk dont chaque tile est calculée à partir de sa position locale.
-    pub fn from_fn(mut tile: impl FnMut(UVec2) -> TileKind) -> Self {
-        let mut tiles = Self::filled(TileKind::default());
-        for (index, slot) in tiles.0.iter_mut().enumerate() {
-            *slot = tile(index_to_local(index));
-        }
-        tiles
-    }
-
-    /// Reconstruit un chunk reçu du réseau. `None` si la taille ne correspond pas.
-    pub fn from_vec(tiles: Vec<TileKind>) -> Option<Self> {
-        tiles.into_boxed_slice().try_into().ok().map(Self)
-    }
-
-    pub fn get(&self, index: usize) -> TileKind {
-        self.0[index]
-    }
-
-    /// Remplace une tile. Renvoie `false` si elle avait déjà cette valeur.
-    pub fn set(&mut self, index: usize, kind: TileKind) -> bool {
-        let changed = self.0[index] != kind;
-        self.0[index] = kind;
-        changed
-    }
-
-    pub fn as_slice(&self) -> &[TileKind] {
-        self.0.as_slice()
-    }
-
-    /// Positions locales des tiles solides.
-    pub fn solid_tiles(&self) -> impl Iterator<Item = UVec2> + '_ {
-        self.0
-            .iter()
-            .enumerate()
-            .filter(|(_, kind)| kind.is_solid())
-            .map(|(index, _)| index_to_local(index))
-    }
 }
 
 /// Marque l'entité d'un chunk et porte sa coordonnée.
@@ -186,28 +137,29 @@ impl Terrain<'_, '_> {
         self.index.get(chunk)
     }
 
-    /// Tile à une coordonnée, ou `None` si son chunk n'est pas chargé.
-    pub fn tile(&self, coord: TileCoord) -> Option<TileKind> {
+    /// Tile d'une couche à une coordonnée, ou `None` si son chunk n'est pas
+    /// chargé.
+    pub fn tile(&self, layer: TileLayer, coord: TileCoord) -> Option<TileKind> {
         let entity = self.index.get(coord.chunk())?;
         let tiles = self.chunks.get(entity).ok()?;
-        Some(tiles.get(coord.local_index()))
+        Some(tiles.get(layer, coord.local_index()))
     }
 
-    /// Remplace une tile.
+    /// Remplace une tile d'une couche.
     ///
     /// Renvoie `None` si son chunk n'est pas chargé, sinon si la tile a changé.
     /// Une tile inchangée ne déclenche pas `Changed<ChunkTiles>`.
-    pub fn set(&mut self, coord: TileCoord, kind: TileKind) -> Option<bool> {
+    pub fn set(&mut self, layer: TileLayer, coord: TileCoord, kind: TileKind) -> Option<bool> {
         let entity = self.index.get(coord.chunk())?;
         let mut tiles = self.chunks.get_mut(entity).ok()?;
         let index = coord.local_index();
 
         // Lecture d'abord, par `Deref` : `Mut` ne marque le chunk modifié qu'à
         // l'écriture.
-        if tiles.get(index) == kind {
+        if tiles.get(layer, index) == kind {
             return Some(false);
         }
-        tiles.set(index, kind);
+        tiles.set(layer, index, kind);
         Some(true)
     }
 }
@@ -243,7 +195,8 @@ pub fn spawn_chunk<'a>(
     chunk
 }
 
-/// Collider d'un chunk : un voxel par tile solide, `None` s'il n'y en a aucune.
+/// Collider d'un chunk : un voxel par position infranchissable (trou dans le
+/// sol ou tile solide), `None` s'il n'y en a aucune.
 ///
 /// Un seul collider par chunk plutôt qu'un par tile : peu d'AABB dans le broad
 /// phase, et la forme `Voxels` de parry sait qu'une rangée de tiles est une
@@ -294,25 +247,23 @@ mod tests {
     use super::*;
     use crate::{CorePlugin, MoveIntent, PlayerBundle, tick_duration};
 
-    /// Chunk dont seule la colonne locale `x` est pleine de murs.
+    /// Chunk dont seule la colonne locale `x` porte des murs.
     fn wall_column(x: u32) -> ChunkTiles {
-        ChunkTiles::from_fn(|local| {
-            if local.x == x {
-                TileKind::Wall
-            } else {
-                TileKind::Floor
-            }
+        ChunkTiles::from_fn(|layer, local| match layer {
+            TileLayer::Ground => TileKind::Floor,
+            TileLayer::Object if local.x == x => TileKind::Wall,
+            TileLayer::Object => TileKind::Empty,
         })
     }
 
     #[test]
     fn voxel_collider_covers_exactly_the_solid_tiles() {
-        let tiles = ChunkTiles::from_fn(|local| {
-            if (local.x * 7 + local.y * 3) % 5 == 0 {
-                TileKind::Wall
-            } else {
-                TileKind::Floor
-            }
+        let tiles = ChunkTiles::from_fn(|layer, local| match layer {
+            // Un trou dans le sol bloque autant qu'un mur posé dessus.
+            TileLayer::Ground if local.y == 0 => TileKind::Empty,
+            TileLayer::Ground => TileKind::Floor,
+            TileLayer::Object if (local.x * 7 + local.y * 3) % 5 == 0 => TileKind::Wall,
+            TileLayer::Object => TileKind::Empty,
         });
         let chunk = ChunkCoord::new(-1, 2);
         let collider = chunk_collider(&tiles).expect("le chunk a des murs");
@@ -323,7 +274,7 @@ mod tests {
                 collider.contains_point(chunk.center(), Rotation::default(), tile.center());
             assert_eq!(
                 inside,
-                tiles.get(index).is_solid(),
+                tiles.is_solid(index),
                 "tile {:?} mal couverte par le collider",
                 tile.0
             );
@@ -332,15 +283,7 @@ mod tests {
 
     #[test]
     fn empty_chunk_has_no_collider() {
-        assert!(chunk_collider(&ChunkTiles::filled(TileKind::Floor)).is_none());
-    }
-
-    #[test]
-    fn chunk_tiles_round_trip_through_a_vec() {
-        let tiles = wall_column(4);
-        let copy = ChunkTiles::from_vec(tiles.as_slice().to_vec()).unwrap();
-        assert_eq!(copy, tiles);
-        assert!(ChunkTiles::from_vec(vec![TileKind::Floor; 3]).is_none());
+        assert!(chunk_collider(&ChunkTiles::default()).is_none());
     }
 
     /// App minimale : `CorePlugin` sans réseau, et un temps qui avance d'un tick
@@ -379,16 +322,18 @@ mod tests {
         assert!(!app.world().resource::<TerrainIndex>().contains(coord));
     }
 
-    #[test]
-    fn a_wall_stops_the_player_and_lets_it_slide() {
-        // Assez proche du départ pour que le joueur l'atteigne bien avant la fin.
-        const WALL_X: u32 = 5;
+    /// Colonne locale de l'obstacle des tests de glissement : assez proche du
+    /// départ pour que le joueur l'atteigne bien avant la fin.
+    const OBSTACLE_X: u32 = 5;
 
+    /// Lance un joueur en diagonale vers une colonne infranchissable en
+    /// [`OBSTACLE_X`], et vérifie qu'il s'y arrête puis glisse le long.
+    fn assert_stops_and_slides(tiles: ChunkTiles) {
         let mut app = simulation();
         spawn_chunk(
             &mut app.world_mut().commands(),
             ChunkCoord::new(0, 0),
-            wall_column(WALL_X),
+            tiles,
         );
 
         let start = Vec2::new(100.0, 300.0);
@@ -402,24 +347,39 @@ mod tests {
 
         let position = app.world().get::<Position>(player).unwrap().0;
         let velocity = app.world().get::<LinearVelocity>(player).unwrap().0;
-        let wall_face = WALL_X as f32 * TILE_SIZE - crate::PlayerSimulationBundle::RADIUS;
+        let face = OBSTACLE_X as f32 * TILE_SIZE - crate::PlayerSimulationBundle::RADIUS;
 
         assert!(
-            position.x <= wall_face + 0.5,
-            "le joueur a traversé le mur : {position:?}"
+            position.x <= face + 0.5,
+            "le joueur a traversé l'obstacle : {position:?}"
         );
         assert!(
-            position.x > wall_face - 2.0,
-            "le joueur n'a pas atteint le mur : {position:?}"
+            position.x > face - 2.0,
+            "le joueur n'a pas atteint l'obstacle : {position:?}"
         );
         assert!(
             position.y > start.y + 300.0,
-            "le joueur ne glisse pas le long du mur : {position:?}"
+            "le joueur ne glisse pas le long de l'obstacle : {position:?}"
         );
         assert!(
             velocity.x.abs() < 1e-3,
-            "vitesse vers le mur non annulée : {velocity:?}"
+            "vitesse vers l'obstacle non annulée : {velocity:?}"
         );
+    }
+
+    #[test]
+    fn a_wall_stops_the_player_and_lets_it_slide() {
+        assert_stops_and_slides(wall_column(OBSTACLE_X));
+    }
+
+    #[test]
+    fn a_hole_stops_the_player_and_lets_it_slide() {
+        let mut tiles = ChunkTiles::default();
+        for y in 0..CHUNK_SIZE {
+            let index = local_to_index(UVec2::new(OBSTACLE_X, y));
+            tiles.set(TileLayer::Ground, index, TileKind::Empty);
+        }
+        assert_stops_and_slides(tiles);
     }
 
     #[test]
@@ -432,8 +392,14 @@ mod tests {
         let tile = chunk.tile(UVec2::new(5, 5));
         app.world_mut()
             .run_system_once(move |mut terrain: Terrain| {
-                assert_eq!(terrain.set(tile, TileKind::Wall), Some(true));
-                assert_eq!(terrain.set(tile, TileKind::Wall), Some(false));
+                assert_eq!(
+                    terrain.set(TileLayer::Object, tile, TileKind::Wall),
+                    Some(true)
+                );
+                assert_eq!(
+                    terrain.set(TileLayer::Object, tile, TileKind::Wall),
+                    Some(false)
+                );
             })
             .unwrap();
         run_for(&mut app, tick_duration());
@@ -448,8 +414,8 @@ mod tests {
         app.world_mut()
             .run_system_once(|mut terrain: Terrain| {
                 let tile = TileCoord::new(7, -3);
-                assert_eq!(terrain.tile(tile), None);
-                assert_eq!(terrain.set(tile, TileKind::Wall), None);
+                assert_eq!(terrain.tile(TileLayer::Ground, tile), None);
+                assert_eq!(terrain.set(TileLayer::Object, tile, TileKind::Wall), None);
             })
             .unwrap();
     }
@@ -462,8 +428,7 @@ mod tests {
         app.update();
         assert!(app.world().get::<Collider>(entity).is_some());
 
-        *app.world_mut().get_mut::<ChunkTiles>(entity).unwrap() =
-            ChunkTiles::filled(TileKind::Floor);
+        *app.world_mut().get_mut::<ChunkTiles>(entity).unwrap() = ChunkTiles::default();
         app.update();
         assert!(app.world().get::<Collider>(entity).is_none());
     }

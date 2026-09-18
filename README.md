@@ -195,15 +195,24 @@ des versions compatibles avec la prédiction.
 
 ## Le monde
 
-Le monde est **infini**, fait de tiles de 64 px (`TILE_SIZE` ; `TileKind` : sol
-ou mur) regroupées en chunks de 32 × 32 tiles (2048 px). Les trois camps s'en partagent
-la charge :
+Le monde est **infini**, fait de tiles de 64 px (`TILE_SIZE`) regroupées en
+chunks de 32 × 32 tiles (2048 px). Chaque position porte une tile par couche
+(`TileLayer`) :
+
+- le **sol** (`Ground`) : une tile praticable, ou un **trou** (`TileKind::Empty`)
+  — infranchissable, et qui laisse voir le vide (`VOID_COLOR`, theta-render) ;
+- les **objets** (`Object`) posés dessus : les murs, et plus tard les objets
+  placés par les joueurs (tables, stations d'artisanat…). Vide le plus souvent.
+
+Une position est infranchissable si l'une de ses couches la bloque
+(`TileLayer::blocks`) : un trou au sol, ou une tile solide. Les trois camps s'en
+partagent la charge :
 
 | Crate | Rôle |
 | --- | --- |
 | `theta-core::terrain` | Ce qu'est un chunk (`TerrainChunk`, `ChunkTiles`), son collider, l'index `TerrainIndex` et l'accès `Terrain`. **Ne génère rien.** |
-| `theta-worldgen` | `WorldGenerator` : chaque tile est une fonction pure de `(graine, coordonnée)`, un bruit fBm. Serveur uniquement. |
-| `theta-render::terrain` | Un `TilemapChunk` (Bevy) par chunk : un mesh et un draw call par chunk. |
+| `theta-worldgen` | `WorldGenerator` : chaque tile est une fonction pure de `(graine, couche, coordonnée)`. Deux bruits fBm indépendants : les murs (~25 %) et les trous du sol (~8 %, jamais sous un mur). Serveur uniquement. |
+| `theta-render::terrain` | Un `TilemapChunk` (Bevy) par couche de chaque chunk : un mesh et un draw call par couche, les tiles vides n'étant pas dessinées. |
 
 Chaque chunk est une entité qui porte ses tiles (`ChunkTiles`), un
 `RigidBody::Static` et **un seul** `Collider::voxels` : peu d'AABB pour le broad
@@ -214,9 +223,23 @@ le collider (`theta-core`) comme le rendu (`theta-render`).
 
 - `spawn_point(index)` répartit les arrivants sur un cercle de rayon
   `SPAWN_RADIUS` ; le générateur garde ce cercle toujours praticable.
-- Une modification de terrain s'exprime par un message Bevy `TileEdit`. Seul le
-  serveur l'applique : le terrain est autoritaire, le client ne modifie jamais
-  une tile de lui-même.
+- Une modification de terrain s'exprime par un message Bevy `TileEdit`
+  (coordonnée, couche, nouvelle tile). Seul le serveur l'applique : le terrain
+  est autoritaire, le client ne modifie jamais une tile de lui-même.
+
+### Format d'un chunk
+
+`ChunkTiles` est sérialisable (serde), dans un format commun au réseau et aux
+futures sauvegardes (`theta-core/src/terrain/chunk.rs`) : les couches dans
+l'ordre de `TileLayer::ALL`, chacune **compressée par plages** — une liste de
+`(TileKind, longueur)`. Avec postcard, qu'utilise lightyear, un chunk généré
+pèse en moyenne ~120 octets, contre 2048 tile par tile.
+
+- La désérialisation refuse une couche incomplète, qui déborde, ou qui contient
+  une plage vide ou une tile inconnue.
+- `TileKind` est encodé par l'index de sa variante : **une nouvelle variante
+  s'ajoute à la fin**. Un test fige les octets d'un chunk ; s'il casse, le
+  format a changé, et `PROTOCOL_ID` doit changer aussi.
 
 ### Diffusion par abonnement
 

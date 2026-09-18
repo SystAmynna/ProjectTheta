@@ -1,17 +1,19 @@
 use bevy::ecs::entity::{EntityMapper, MapEntities};
 use bevy::prelude::*;
-use lightyear::prelude::*;
 use lightyear::prelude::input::native::{ActionState, InputPlugin};
+use lightyear::prelude::*;
 use lightyear_avian2d::plugin::{AvianReplicationMode, LightyearAvianPlugin};
 use serde::{Deserialize, Serialize};
-use theta_core::{ChunkCoord, MoveIntent, Player, PlayerColor, PlayerSystems, TileKind};
+use theta_core::{
+    ChunkCoord, ChunkTiles, MoveIntent, Player, PlayerColor, PlayerSystems, TileKind, TileLayer,
+};
 
 // La cadence de simulation fait partie du contrat entre client et serveur.
 pub use theta_core::{TICK_HZ, tick_duration};
 
 /// Identifiant du protocole : à changer à chaque modification incompatible,
 /// pour qu'un client et un serveur de versions différentes se refusent.
-pub const PROTOCOL_ID: u64 = 0x7E7A_0004;
+pub const PROTOCOL_ID: u64 = 0x7E7A_0006;
 
 pub mod token;
 
@@ -68,6 +70,17 @@ impl MapEntities for MoveInput {
 /// — jamais une modification avant le contenu qu'elle modifie.
 pub struct TerrainChannel;
 
+/// Modification d'une tile, désignée par sa couche et son index local dans le
+/// chunk.
+///
+/// Signifie « la tile devient » : l'appliquer deux fois ne change rien.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TileChange {
+    pub layer: TileLayer,
+    pub index: u16,
+    pub kind: TileKind,
+}
+
 /// Mise à jour du terrain d'un client, décidée par le serveur.
 ///
 /// Le serveur abonne chaque client aux chunks proches de son joueur : il envoie
@@ -79,19 +92,16 @@ pub struct TerrainChannel;
 /// un `Unload` suivi d'un nouveau `Snapshot` du même chunk serait perdu.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TerrainUpdate {
-    /// Contenu complet d'un chunk qui entre dans le rayon du client, en
-    /// row-major, y vers le haut (`CHUNK_AREA` tiles).
+    /// Contenu complet d'un chunk qui entre dans le rayon du client, toutes
+    /// couches comprises, dans le format compressé de [`ChunkTiles`].
     Snapshot {
         chunk: ChunkCoord,
-        tiles: Vec<TileKind>,
+        tiles: ChunkTiles,
     },
-    /// Tiles modifiées pendant un tick, par index local dans le chunk.
-    ///
-    /// Chaque entrée signifie « la tile devient » : l'appliquer deux fois ne
-    /// change rien.
+    /// Tiles modifiées pendant un tick.
     Edits {
         chunk: ChunkCoord,
-        edits: Vec<(u16, TileKind)>,
+        edits: Vec<TileChange>,
     },
     /// Le chunk est sorti du rayon du client : il doit l'oublier. Le serveur ne
     /// lui en enverra plus rien, sauf un nouveau `Snapshot` s'il y revient.
@@ -180,6 +190,33 @@ mod tests {
         for (hue, rgb) in cases {
             let got = hsv_to_rgb(hue, 1.0, 1.0);
             assert!(close(got, rgb), "teinte {hue} : {got:?} au lieu de {rgb:?}");
+        }
+    }
+
+    /// Le message tel que lightyear le transporte, sérialisé avec postcard.
+    #[test]
+    fn terrain_updates_round_trip_through_postcard() {
+        let mut tiles = ChunkTiles::default();
+        tiles.set(TileLayer::Object, 12, TileKind::Wall);
+        let chunk = ChunkCoord::new(-3, 8);
+
+        for update in [
+            TerrainUpdate::Snapshot { chunk, tiles },
+            TerrainUpdate::Edits {
+                chunk,
+                edits: vec![TileChange {
+                    layer: TileLayer::Ground,
+                    index: 1023,
+                    kind: TileKind::Wall,
+                }],
+            },
+            TerrainUpdate::Unload { chunk },
+        ] {
+            let bytes = postcard::to_allocvec(&update).unwrap();
+            assert_eq!(
+                postcard::from_bytes::<TerrainUpdate>(&bytes).unwrap(),
+                update
+            );
         }
     }
 

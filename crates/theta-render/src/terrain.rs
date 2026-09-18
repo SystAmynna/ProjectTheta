@@ -1,18 +1,19 @@
-//! Rendu du terrain : un `TilemapChunk` par chunk.
+//! Rendu du terrain : un `TilemapChunk` par couche de chaque chunk.
 //!
-//! `TilemapChunk` (intégré à Bevy) dessine un chunk entier en un seul mesh et un
-//! seul draw call ; les indices de tiles vivent dans une petite texture, seule
+//! `TilemapChunk` (intégré à Bevy) dessine une couche entière en un seul mesh et
+//! un seul draw call ; les indices de tiles vivent dans une petite texture, seule
 //! ré-envoyée au GPU quand le chunk change. Ce module ne fait qu'habiller les
 //! chunks que `theta-core` crée : il ne décide d'aucune tile.
 
 use bevy::prelude::*;
 use bevy::sprite_render::{AlphaMode2d, TileData, TilemapChunk, TilemapChunkTileData};
 use theta_core::terrain::{CHUNK_SIZE, TILE_SIZE, index_to_local};
-use theta_core::{ChunkCoord, ChunkTiles, TerrainChunk, TileCoord, TileKind};
+use theta_core::{ChunkCoord, ChunkTiles, TerrainChunk, TileCoord, TileKind, TileLayer};
 
 use crate::GameAssets;
 
-/// Profondeur du terrain : sous les joueurs, dessinés en `z = 0`.
+/// Profondeur de la couche de sol, sous les joueurs dessinés en `z = 0`. Chaque
+/// couche suivante est dessinée juste au-dessus de la précédente.
 const TERRAIN_Z: f32 = -10.0;
 
 pub(crate) struct TerrainRenderPlugin;
@@ -34,33 +35,35 @@ impl TilesetIndex {
     /// Nombre de couches du tileset.
     pub const COUNT: u32 = 3;
 
-    /// Couche à afficher pour une tile.
+    /// Couche à afficher pour une tile, ou `None` pour une tile vide.
     ///
     /// La variante de sol est tirée de la position : purement visuelle, elle
     /// n'existe pas pour la simulation et reste la même d'une image à l'autre.
-    pub fn of(kind: TileKind, coord: TileCoord) -> u16 {
+    pub fn of(kind: TileKind, coord: TileCoord) -> Option<u16> {
         match kind {
-            TileKind::Wall => Self::WALL,
+            TileKind::Empty => None,
+            TileKind::Wall => Some(Self::WALL),
             TileKind::Floor => {
                 let hash = (coord.0.x as u32).wrapping_mul(0x9E37_79B1)
                     ^ (coord.0.y as u32).wrapping_mul(0x85EB_CA77);
-                if hash >> 29 == 0 {
+                Some(if hash >> 29 == 0 {
                     Self::FLOOR_ALT
                 } else {
                     Self::FLOOR
-                }
+                })
             }
         }
     }
 }
 
-/// Entité enfant qui porte le rendu d'un chunk.
+/// Entités enfants qui portent le rendu d'un chunk, une par couche, dans
+/// l'ordre de [`TileLayer::ALL`].
 ///
-/// Le rendu vit sur un enfant plutôt que sur le chunk lui-même : le chunk est un
-/// corps physique dont `Transform` est réécrit depuis `Position`, et l'enfant
-/// garde ainsi sa propre profondeur.
+/// Le rendu vit sur des enfants plutôt que sur le chunk lui-même : le chunk est
+/// un corps physique dont `Transform` est réécrit depuis `Position`, et chaque
+/// enfant garde ainsi sa propre profondeur.
 #[derive(Component, Debug)]
-struct ChunkRender(Entity);
+struct ChunkRender([Entity; TileLayer::ALL.len()]);
 
 /// Donne un rendu à chaque chunk qui n'en a pas encore.
 fn attach_chunk_render(
@@ -70,26 +73,29 @@ fn attach_chunk_render(
 ) {
     for (entity, &TerrainChunk(coord), tiles) in &chunks {
         // `theta-core` ne connaît pas la visibilité ; sans elle sur le parent,
-        // l'enfant affiché hériterait d'une hiérarchie incohérente (B0004).
+        // les enfants affichés hériteraient d'une hiérarchie incohérente (B0004).
         commands.entity(entity).insert(Visibility::default());
 
-        let render = commands
-            .spawn((
-                Name::new("Chunk render"),
-                TilemapChunk {
-                    chunk_size: UVec2::splat(CHUNK_SIZE),
-                    tile_display_size: UVec2::splat(TILE_SIZE as u32),
-                    tileset: assets.tileset.clone(),
-                    // Aucune tile n'est transparente : pas de tri ni de
-                    // mélange à payer.
-                    alpha_mode: AlphaMode2d::Opaque,
-                },
-                TilemapChunkTileData(tile_data(coord, tiles)),
-                Transform::from_xyz(0.0, 0.0, TERRAIN_Z),
-                ChildOf(entity),
-            ))
-            .id();
-        commands.entity(entity).insert(ChunkRender(render));
+        let renders = TileLayer::ALL.map(|layer| {
+            commands
+                .spawn((
+                    Name::new(format!("Chunk render {layer:?}")),
+                    TilemapChunk {
+                        chunk_size: UVec2::splat(CHUNK_SIZE),
+                        tile_display_size: UVec2::splat(TILE_SIZE as u32),
+                        tileset: assets.tileset.clone(),
+                        // Aucune tile n'est translucide, et les tiles vides
+                        // sont écartées par le shader : pas de tri ni de
+                        // mélange à payer, même pour les couches du dessus.
+                        alpha_mode: AlphaMode2d::Opaque,
+                    },
+                    TilemapChunkTileData(tile_data(coord, tiles, layer)),
+                    Transform::from_xyz(0.0, 0.0, TERRAIN_Z + layer as u8 as f32),
+                    ChildOf(entity),
+                ))
+                .id()
+        });
+        commands.entity(entity).insert(ChunkRender(renders));
     }
 }
 
@@ -99,22 +105,27 @@ fn update_chunk_render(
     mut renders: Query<&mut TilemapChunkTileData>,
 ) {
     for (&TerrainChunk(coord), tiles, render) in &chunks {
-        if let Ok(mut data) = renders.get_mut(render.0) {
-            data.0 = tile_data(coord, tiles);
+        for (layer, &entity) in TileLayer::ALL.iter().zip(&render.0) {
+            if let Ok(mut data) = renders.get_mut(entity) {
+                data.0 = tile_data(coord, tiles, *layer);
+            }
         }
     }
 }
 
-/// Indices du tileset d'un chunk, dans l'ordre de `TilemapChunkTileData` :
-/// row-major, y vers le haut — le même que [`ChunkTiles`].
-fn tile_data(coord: ChunkCoord, tiles: &ChunkTiles) -> Vec<Option<TileData>> {
+/// Indices du tileset d'une couche d'un chunk, dans l'ordre de
+/// `TilemapChunkTileData` : row-major, y vers le haut — le même que
+/// [`ChunkTiles`]. Les tiles vides valent `None` et ne sont pas dessinées : un
+/// trou dans le sol laisse voir le vide ([`VOID_COLOR`](crate::VOID_COLOR)).
+fn tile_data(coord: ChunkCoord, tiles: &ChunkTiles, layer: TileLayer) -> Vec<Option<TileData>> {
     tiles
+        .layer(layer)
         .as_slice()
         .iter()
         .enumerate()
         .map(|(index, &kind)| {
             let tile = coord.tile(index_to_local(index));
-            Some(TileData::from_tileset_index(TilesetIndex::of(kind, tile)))
+            TilesetIndex::of(kind, tile).map(TileData::from_tileset_index)
         })
         .collect()
 }
@@ -143,16 +154,35 @@ mod tests {
     #[test]
     fn tileset_index_depends_only_on_kind_and_position() {
         let coord = TileCoord::new(-12, 40);
-        assert_eq!(TilesetIndex::of(TileKind::Wall, coord), TilesetIndex::WALL);
-        let floor = TilesetIndex::of(TileKind::Floor, coord);
+        assert_eq!(TilesetIndex::of(TileKind::Empty, coord), None);
+        assert_eq!(
+            TilesetIndex::of(TileKind::Wall, coord),
+            Some(TilesetIndex::WALL)
+        );
+        let floor = TilesetIndex::of(TileKind::Floor, coord).unwrap();
         assert!([TilesetIndex::FLOOR, TilesetIndex::FLOOR_ALT].contains(&floor));
-        assert_eq!(TilesetIndex::of(TileKind::Floor, coord), floor);
+        assert_eq!(TilesetIndex::of(TileKind::Floor, coord), Some(floor));
         assert!(floor < TilesetIndex::COUNT as u16);
     }
 
     #[test]
-    fn tile_data_covers_the_whole_chunk() {
-        let data = tile_data(ChunkCoord::new(0, 0), &ChunkTiles::filled(TileKind::Wall));
-        assert_eq!(data.len(), CHUNK_AREA);
+    fn tile_data_covers_the_whole_chunk_and_skips_empty_tiles() {
+        let mut tiles = ChunkTiles::default();
+        tiles.set(TileLayer::Object, 5, TileKind::Wall);
+        let chunk = ChunkCoord::new(0, 0);
+
+        let ground = tile_data(chunk, &tiles, TileLayer::Ground);
+        assert_eq!(ground.len(), CHUNK_AREA);
+        assert!(ground.iter().all(Option::is_some));
+
+        let mut holed = ChunkTiles::default();
+        holed.set(TileLayer::Ground, 3, TileKind::Empty);
+        let ground = tile_data(chunk, &holed, TileLayer::Ground);
+        assert!(ground[3].is_none(), "un trou n'est pas dessiné");
+
+        let object = tile_data(chunk, &tiles, TileLayer::Object);
+        assert_eq!(object.len(), CHUNK_AREA);
+        assert_eq!(object.iter().filter(|tile| tile.is_some()).count(), 1);
+        assert!(object[5].is_some());
     }
 }
