@@ -6,12 +6,10 @@ use lightyear_avian2d::plugin::{AvianReplicationMode, LightyearAvianPlugin};
 use serde::{Deserialize, Serialize};
 use theta_core::{ChunkCoord, MoveIntent, Player, PlayerColor, PlayerSystems, TileKind};
 
-// La cadence de simulation vit dans `theta-core` : le protocole ne fait que la
-// relayer, pour qu'aucun binaire n'ait à choisir entre deux sources.
+// Récupère la cadence des ticks depuis theta-core
 pub use theta_core::{TICK_HZ, tick_duration};
 
-/// Identifiant de protocole : deux binaires qui ne le partagent pas ne peuvent
-/// pas se connecter. À incrémenter quand le protocole devient incompatible.
+/// Identifiant unique du protocole, doit être changé à chaque modification du protocole
 pub const PROTOCOL_ID: u64 = 0x7E7A_0003;
 
 /// Clé privée du handshake netcode.

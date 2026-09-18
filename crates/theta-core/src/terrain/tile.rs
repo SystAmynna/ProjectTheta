@@ -2,16 +2,9 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Côté d'une tile, en pixels.
-///
-/// La hitbox du joueur fait 64 px de diamètre, soit deux tiles : un passage doit
-/// en compter au moins trois pour qu'il s'y faufile.
-pub const TILE_SIZE: f32 = 32.0;
+pub const TILE_SIZE: f32 = 64.0;
 
 /// Côté d'un chunk, en tiles.
-///
-/// Doit rester pair : l'entité d'un chunk est posée en son centre, et les voxels
-/// de son collider sont décalés de `CHUNK_SIZE / 2` pour tomber pile sur les
-/// tiles affichées.
 pub const CHUNK_SIZE: u32 = 32;
 
 /// Nombre de tiles dans un chunk.
@@ -20,10 +13,7 @@ pub const CHUNK_AREA: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
 /// Côté d'un chunk, en pixels.
 pub const CHUNK_WORLD_SIZE: f32 = TILE_SIZE * CHUNK_SIZE as f32;
 
-/// Nature d'une tile.
-///
-/// `theta-core` ne dit rien de son apparence : c'est `theta-render` qui associe
-/// une texture à chaque variante, comme il le fait pour `PlayerColor`.
+/// Nature simulative d'une tile
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum TileKind {
@@ -42,9 +32,6 @@ impl TileKind {
 }
 
 /// Coordonnée d'une tile dans le monde, en tiles.
-///
-/// La tile `(0, 0)` couvre `[0, TILE_SIZE]²` en pixels ; le monde est infini dans
-/// toutes les directions, les coordonnées négatives sont donc courantes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TileCoord(pub IVec2);
 
@@ -64,9 +51,6 @@ impl TileCoord {
     }
 
     /// Chunk qui contient la tile.
-    ///
-    /// `div_euclid` et non `/` : la tile `-1` appartient au chunk `-1`, pas au
-    /// chunk `0`.
     pub fn chunk(self) -> ChunkCoord {
         ChunkCoord(self.0.div_euclid(IVec2::splat(CHUNK_SIZE as i32)))
     }

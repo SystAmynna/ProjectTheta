@@ -44,10 +44,7 @@ pub struct Player;
 
 /// Couleur d'un joueur, en RGB linéaire.
 ///
-/// `theta-core` ne dépend pas du rendu : comme [`Rarity::rgb`](crate::data::Rarity::rgb),
-/// il expose des composantes brutes et laisse `theta-render` en faire une couleur
-/// Bevy. La couleur est décidée par le serveur et répliquée, pour que tous les
-/// clients voient le même joueur de la même teinte.
+/// todo : remplacer par un autre système de distinction (pseudos)
 #[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlayerColor(pub [f32; 3]);
 
@@ -110,6 +107,7 @@ pub struct PlayerSimulationBundle {
 }
 
 impl PlayerSimulationBundle {
+    // todo : modifier la boite de collision du joueur
     /// Rayon de la hitbox du joueur, en pixels (le sprite fait 64 × 64).
     pub const RADIUS: f32 = 32.0;
 

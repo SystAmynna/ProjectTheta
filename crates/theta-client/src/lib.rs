@@ -37,10 +37,10 @@ pub struct ClientPlugin;
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((input::InputPlugin, terrain::TerrainPlugin))
+        app.add_plugins((input::InputPlugin, terrain::TerrainPlugin)) // Ajout des plugins client
             // La prédiction est pilotée par une ressource globale.
             .init_resource::<PredictionManager>()
-            .add_systems(Startup, connect)
+            .add_systems(Startup, connect) // todo : retirer la connexion du Startup quand on aura un menu principal
             .add_observer(on_predicted)
             .add_observer(on_interpolated)
             .add_observer(on_connected)
@@ -60,6 +60,7 @@ fn client_id() -> u64 {
         .unwrap_or_default()
 }
 
+/// Connecte le client au serveur
 fn connect(config: Res<ClientConfig>, mut commands: Commands) {
     let auth = Authentication::Manual {
         server_addr: config.server,

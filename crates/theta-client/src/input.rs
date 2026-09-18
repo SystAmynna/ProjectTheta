@@ -8,18 +8,16 @@ pub(crate) struct InputPlugin;
 
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<KeyBindings>()
-            // `WriteClientInputs` est le moment prévu par lightyear pour écrire
-            // l'`ActionState` : c'est juste avant qu'il ne soit bufferisé, puis
-            // envoyé au serveur et rejoué en cas de rollback.
+        app.init_resource::<KeyBindings>() // Initialise la ressource bevy du clavier
             .add_systems(
-                FixedPreUpdate,
-                gather_move_input.in_set(InputSystems::WriteClientInputs),
+                FixedPreUpdate, // Juste avant l'update du TICK
+                gather_move_input.in_set(InputSystems::WriteClientInputs), // Ajoute le système dans le set de système de Lightyear (bufferisé, rollback...)
             );
     }
 }
 
 /// Touches de déplacement, modifiables à l'exécution.
+/// todo : Autres contrôles
 #[derive(Resource, Debug, Clone)]
 pub struct KeyBindings {
     pub up: KeyCode,
@@ -27,10 +25,11 @@ pub struct KeyBindings {
     pub left: KeyCode,
     pub right: KeyCode,
 }
-
+/// Attribution par défaut
 impl Default for KeyBindings {
     fn default() -> Self {
         Self {
+            // todo : load les contrôles enregistrés.
             up: KeyCode::KeyW,
             down: KeyCode::KeyS,
             left: KeyCode::KeyA,
@@ -39,6 +38,7 @@ impl Default for KeyBindings {
     }
 }
 
+/// Appliquer les inputs
 fn gather_move_input(
     mut players: Query<&mut ActionState<MoveInput>, With<InputMarker<MoveInput>>>,
     keys: Res<ButtonInput<KeyCode>>,
