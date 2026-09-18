@@ -1,13 +1,14 @@
-use avian2d::physics_transform::PhysicsTransformSystems;
 use avian2d::prelude::{Position, Rotation};
 use bevy::prelude::*;
 use bevy::window::{PresentMode, WindowResolution};
 use theta_core::{Player, PlayerColor};
 
 pub mod assets;
+pub mod camera;
 pub mod terrain;
 
 pub use assets::{ASSET_ROOT_ENV, GameAssets, asset_plugin, asset_root};
+pub use camera::{CameraTarget, GameCamera, VIEW_SIZE};
 
 /// [`ImagePlugin`] du client : filtrage au plus proche, pour que les tiles en
 /// pixel art restent nettes au lieu d'être lissées.
@@ -25,6 +26,10 @@ pub fn image_plugin() -> ImagePlugin {
 /// elle, reste à `theta_core::TICK_HZ` : rien de ce qui est fait ici ne peut la
 /// faire varier. Repasser à `PresentMode::AutoVsync` suffit à réactiver la
 /// synchronisation verticale (moins de déchirement, FPS bornés par l'écran).
+///
+/// La taille de la fenêtre ne détermine que la taille d'affichage : la zone de
+/// monde visible est toujours [`VIEW_SIZE`], en fenêtré comme en plein écran —
+/// voir [`camera`].
 ///
 /// À passer à `DefaultPlugins`, comme [`asset_plugin`] :
 ///
@@ -60,45 +65,22 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((assets::AssetsPlugin, terrain::TerrainRenderPlugin))
-            .add_systems(Startup, spawn_camera)
-            .add_systems(Update, attach_player_sprite)
-            // Après l'écriture de `Transform` depuis `Position` (interpolation
-            // et correction comprises), et avant sa propagation : la caméra
-            // colle ainsi à l'image du joueur telle qu'elle sera affichée.
-            .add_systems(
-                PostUpdate,
-                follow_camera_target
-                    .after(PhysicsTransformSystems::PositionToTransform)
-                    .before(TransformSystems::Propagate),
-            );
-    }
-}
-
-/// Entité que la caméra suit : le joueur local, marqué par `theta-client`.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct CameraTarget;
-
-fn spawn_camera(mut commands: Commands) {
-    commands.spawn(Camera2d);
-}
-
-/// Centre la caméra sur sa cible.
-fn follow_camera_target(
-    target: Query<&Transform, (With<CameraTarget>, Without<Camera2d>)>,
-    mut cameras: Query<&mut Transform, With<Camera2d>>,
-) {
-    let Ok(target) = target.single() else {
-        return;
-    };
-    for mut camera in &mut cameras {
-        camera.translation.x = target.translation.x;
-        camera.translation.y = target.translation.y;
+        app.add_plugins((
+            assets::AssetsPlugin,
+            camera::CameraPlugin,
+            terrain::TerrainRenderPlugin,
+        ))
+        .add_systems(Update, attach_player_sprite);
     }
 }
 
 /// Un joueur prêt à être affiché mais qui n'a pas encore de sprite.
-type UndressedPlayer = (With<Player>, With<Position>, With<Rotation>, Without<Sprite>);
+type UndressedPlayer = (
+    With<Player>,
+    With<Position>,
+    With<Rotation>,
+    Without<Sprite>,
+);
 
 /// Donne un sprite à tout joueur qui vient d'apparaître et n'en a pas encore.
 ///
