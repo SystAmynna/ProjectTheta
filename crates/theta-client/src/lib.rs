@@ -1,18 +1,19 @@
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 
 use bevy::prelude::*;
 use lightyear::frame_interpolation::FrameInterpolate;
 use lightyear::prelude::*;
-use lightyear::prelude::client::*;
 use lightyear::prelude::input::native::InputMarker;
 use theta_core::{PlayerSimulationBundle, Speed};
-use theta_protocole::token::request_token;
 use theta_protocole::{MoveInput, PlayerId};
 use theta_render::CameraTarget;
 
+mod connection;
 mod input;
+mod menu;
 mod terrain;
 
+pub use connection::{AppState, ConnectionError};
 pub use input::KeyBindings;
 
 /// Paramètres d'exécution du client, fournis par le binaire.
@@ -29,7 +30,8 @@ pub struct ClientConfig {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct LocalPlayer;
 
-/// Côté client : saisie locale, connexion au serveur, prédiction et interpolation.
+/// Côté client : menu, connexion au serveur, saisie locale, prédiction et
+/// interpolation.
 ///
 /// `CorePlugin` (theta-core) et `ProtocolPlugin` (theta-protocole) doivent être
 /// ajoutés séparément par le binaire, ainsi que la ressource [`ClientConfig`].
@@ -37,59 +39,17 @@ pub struct ClientPlugin;
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((input::InputPlugin, terrain::TerrainPlugin))
-            // La prédiction est pilotée par une ressource globale.
-            .init_resource::<PredictionManager>()
-            // Faute de menu principal, la connexion part dès le démarrage.
-            .add_systems(Startup, connect)
-            .add_observer(on_predicted)
-            .add_observer(on_interpolated)
-            .add_observer(on_connected)
-            .add_observer(on_disconnected);
-    }
-}
-
-/// Connecte le client au serveur.
-fn connect(config: Res<ClientConfig>, mut commands: Commands) {
-    // Le token s'obtient auprès du serveur avant d'ouvrir la connexion UDP.
-    // L'appel est bloquant : la fenêtre reste figée tant qu'il n'a pas abouti,
-    // au plus quelques secondes (voir `request_token`).
-    let token = match request_token(config.server) {
-        Ok(token) => token,
-        Err(error) => {
-            error!(
-                "Impossible d'obtenir un token de {} : {error}",
-                config.server
-            );
-            return;
-        }
-    };
-
-    let netcode = match NetcodeClient::new(Authentication::Token(token), NetcodeConfig::default()) {
-        Ok(netcode) => netcode,
-        Err(error) => {
-            error!("Impossible de préparer la connexion : {error:?}");
-            return;
-        }
-    };
-
-    let client = commands
-        .spawn((
-            Name::new("Client"),
-            netcode,
-            // Port 0 : le système en attribue un libre.
-            LocalAddr(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0)),
-            UdpIo::default(),
-            ReplicationReceiver,
-            // Non inséré automatiquement côté client, et sans lui les horloges
-            // du client et du serveur ne se synchronisent pas.
-            PingManager::default(),
+        app.add_plugins((
+            connection::ConnectionPlugin,
+            menu::MenuPlugin,
+            input::InputPlugin,
+            terrain::TerrainPlugin,
         ))
-        .id();
-
-    commands.trigger(Connect { entity: client });
-
-    info!("Connexion au serveur {}", config.server);
+        // La prédiction est pilotée par une ressource globale.
+        .init_resource::<PredictionManager>()
+        .add_observer(on_predicted)
+        .add_observer(on_interpolated);
+    }
 }
 
 /// Le serveur nous a envoyé une entité prédite : si elle nous appartient, c'est
@@ -129,21 +89,5 @@ fn on_predicted(
 fn on_interpolated(interpolated: On<Add, Interpolated>, players: Query<&PlayerId>) {
     if let Ok(id) = players.get(interpolated.entity) {
         info!("Joueur distant visible : {:?}", id.0);
-    }
-}
-
-fn on_connected(_: On<Add, Connected>) {
-    info!("Connecté au serveur");
-}
-
-fn on_disconnected(disconnected: On<Add, Disconnected>, clients: Query<&Disconnected>) {
-    let Ok(state) = clients.get(disconnected.entity) else {
-        return;
-    };
-
-    // `Unknown` est l'état initial d'un client qui n'a pas encore tenté de se
-    // connecter : ce n'est pas une déconnexion.
-    if !matches!(state.reason, DisconnectedReason::Unknown) {
-        warn!("Déconnecté du serveur : {:?}", state.reason);
     }
 }

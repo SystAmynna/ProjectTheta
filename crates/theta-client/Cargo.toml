@@ -17,6 +17,10 @@ theta-core = { workspace = true }
 theta-protocole = { workspace = true }
 theta-render = { workspace = true }
 avian2d = { workspace = true }
-bevy = { workspace = true, features = ["keyboard"] }
+bevy = { workspace = true, features = [
+    "keyboard",
+    "bevy_sprite",
+    "bevy_text",
+] }
 lightyear = { workspace = true, features = ["client"] }
 clap = { workspace = true }

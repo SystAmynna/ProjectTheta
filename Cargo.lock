@@ -6821,7 +6821,7 @@ dependencies = [
 
 [[package]]
 name = "theta-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "avian2d",
  "bevy",
@@ -6834,7 +6834,7 @@ dependencies = [
 
 [[package]]
 name = "theta-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "avian2d",
  "bevy",
@@ -6843,7 +6843,7 @@ dependencies = [
 
 [[package]]
 name = "theta-protocole"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "avian2d",
  "bevy",
@@ -6855,7 +6855,7 @@ dependencies = [
 
 [[package]]
 name = "theta-render"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "avian2d",
  "bevy",
@@ -6864,7 +6864,7 @@ dependencies = [
 
 [[package]]
 name = "theta-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "avian2d",
  "bevy",
@@ -6877,7 +6877,7 @@ dependencies = [
 
 [[package]]
 name = "theta-worldgen"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bevy",
  "theta-core",

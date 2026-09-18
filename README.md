@@ -13,7 +13,7 @@ binaire ne dépend que des crates dont il a besoin.
 | `theta-protocole` | lib | Protocole réseau partagé (composants répliqués, inputs, messages). |
 | `theta-render` | lib | Rendu : caméra, sprites, tilemap et **gestion des assets**. Uniquement côté client. |
 | `theta-worldgen` | lib | **Génération du monde**. Uniquement côté serveur. |
-| `theta-client` | lib + bin `theta-client` | Saisie clavier, connexion au serveur, joueur local, réception du terrain. |
+| `theta-client` | lib + bin `theta-client` | Menu, connexion au serveur, saisie clavier, joueur local, réception du terrain. |
 | `theta-server` | lib + bin `theta-server` | Simulation autoritaire, génération à la demande et diffusion du terrain, sans fenêtre ni rendu. |
 
 Dépendances :
@@ -36,6 +36,12 @@ cargo run -p theta-client -- --server 127.0.0.1:5000
 cargo run -p theta-server              # serveur headless, graine tirée de l'heure
 cargo run -p theta-server -- --bind 0.0.0.0:5000 --seed 42
 ```
+
+Le client s'ouvre sur un menu provisoire : **Entrée** rejoint le serveur passé
+en `--server`. Il passe par trois états (`AppState`) : `Menu`, `Connecting` —
+demande de token sur l'`IoTaskPool`, sans figer la fenêtre, puis handshake — et
+`InGame` une fois connecté. Un échec ou une déconnexion ramène au menu, qui en
+affiche la raison.
 
 ## Vérifier
 
